@@ -1,4 +1,5 @@
 use rand::Rng;
+use std::sync::OnceLock;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Move {
@@ -8,12 +9,14 @@ pub enum Move {
     Right,
 }
 
+const LINE_TABLE_SIZE: usize = 0x1_0000; // 65,536 possible 16-bit lines
+
 struct Stores {
-    shift_left: [Board; 0xffff],
-    shift_right: [Board; 0xffff],
-    shift_up: [Board; 0xffff],
-    shift_down: [Board; 0xffff],
-    score: [Score; 0xffff],
+    shift_left: Box<[Board]>,
+    shift_right: Box<[Board]>,
+    shift_up: Box<[Board]>,
+    shift_down: Box<[Board]>,
+    score: Box<[Score]>,
 }
 
 pub type Board = u64;
@@ -22,19 +25,15 @@ type Tile = u64;
 type Score = u64;
 
 pub fn new() {
-    unsafe {
-        create_stores();
-    }
+    // Ensure lookup tables are initialized
+    STORES.get_or_init(create_stores);
 }
 
 pub fn get_score(board: Board) -> Score {
+    let score_table = &stores().score;
     (0..4).fold(0, |acc, idx| {
-        let row_val = extract_line(board, idx);
-        let row_score;
-        unsafe {
-            row_score = STORES.score.get_unchecked(row_val as usize);
-        }
-        acc + row_score
+        let row_val = extract_line(board, idx) as u16;
+        acc + unsafe { *score_table.get_unchecked(row_val as usize) }
     })
 }
 
@@ -62,7 +61,7 @@ pub fn transpose(x: Board) -> Board {
     let b1 = a & 0xFF00FF0000FF00FF;
     let b2 = a & 0x00FF00FF00000000;
     let b3 = a & 0x00000000FF00FF00;
-    return b1 | (b2 >> 24) | (b3 << 24);
+    b1 | (b2 >> 24) | (b3 << 24)
 }
 
 pub fn extract_line(board: Board, line_idx: u64) -> Line {
@@ -74,11 +73,10 @@ pub fn get_tile_val(board: Board, idx: usize) -> u16 {
 }
 
 pub fn line_to_vec(line: Line) -> Vec<Tile> {
-    let tiles = (0..4).fold(Vec::new(), |mut tiles, tile_idx| {
+    (0..4).fold(Vec::new(), |mut tiles, tile_idx| {
         tiles.push(line >> ((3 - tile_idx) * 4) & 0xf);
         tiles
-    });
-    tiles
+    })
 }
 
 pub fn is_game_over(board: Board) -> bool {
@@ -97,7 +95,7 @@ pub fn count_empty(board: Board) -> u64 {
 }
 
 pub fn to_str(board: Board) -> String {
-    let board: Vec<_> = to_vec(board).iter().map(|x| format_val(x)).collect();
+    let board: Vec<_> = to_vec(board).iter().map(format_val).collect();
     format!(
         "\r
         {}|{}|{}|{}\r
@@ -127,27 +125,52 @@ pub fn to_str(board: Board) -> String {
     )
 }
 
-static mut STORES: Stores = Stores {
-    shift_left: [0; 0xffff],
-    shift_right: [0; 0xffff],
-    shift_up: [0; 0xffff],
-    shift_down: [0; 0xffff],
-    score: [0; 0xffff],
-};
+static STORES: OnceLock<Stores> = OnceLock::new();
 
-unsafe fn create_stores() {
-    let mut val = 0;
-    while val < 0xffff {
-        STORES.shift_left[val] = shift_line(val as u64, Move::Left);
-        STORES.shift_right[val] = shift_line(val as u64, Move::Right);
+fn create_stores() -> Stores {
+    // Allocate on the heap to avoid large stack frames
+    let mut shift_left = vec![0u64; LINE_TABLE_SIZE];
+    let mut shift_right = vec![0u64; LINE_TABLE_SIZE];
+    let mut shift_up = vec![0u64; LINE_TABLE_SIZE];
+    let mut shift_down = vec![0u64; LINE_TABLE_SIZE];
+    let mut score = vec![0u64; LINE_TABLE_SIZE];
 
-        STORES.shift_up[val] = shift_line(val as u64, Move::Up);
-        STORES.shift_down[val] = shift_line(val as u64, Move::Down);
-
-        STORES.score[val] = calc_score(val as u64);
-
+    let mut val: usize = 0;
+    while val < LINE_TABLE_SIZE {
+        let line = val as u64;
+        shift_left[val] = shift_line(line, Move::Left);
+        shift_right[val] = shift_line(line, Move::Right);
+        shift_up[val] = shift_line(line, Move::Up);
+        shift_down[val] = shift_line(line, Move::Down);
+        score[val] = calc_score(line);
         val += 1;
     }
+
+    Stores {
+        shift_left: shift_left.into_boxed_slice(),
+        shift_right: shift_right.into_boxed_slice(),
+        shift_up: shift_up.into_boxed_slice(),
+        shift_down: shift_down.into_boxed_slice(),
+        score: score.into_boxed_slice(),
+    }
+}
+
+#[inline(always)]
+fn stores() -> &'static Stores {
+    STORES.get().expect("Engine stores not initialized; call engine::new() first")
+}
+
+#[inline(always)]
+fn get_line_entry(table: &[Board], idx: u16) -> Board {
+    debug_assert!((idx as usize) < LINE_TABLE_SIZE);
+    unsafe { *table.get_unchecked(idx as usize) }
+}
+
+#[inline(always)]
+fn get_score_entry(idx: u16) -> Score {
+    debug_assert!((idx as usize) < LINE_TABLE_SIZE);
+    let score_table = &stores().score;
+    unsafe { *score_table.get_unchecked(idx as usize) }
 }
 
 // Credit to Nneonneo
@@ -181,26 +204,30 @@ fn generate_random_tile() -> Tile {
 }
 
 fn shift_rows(board: Board, move_dir: Move) -> Board {
+    let s = stores();
+    let table: &[Board] = match move_dir {
+        Move::Left => &s.shift_left,
+        Move::Right => &s.shift_right,
+        _ => panic!("Trying to move up or down in shift rows"),
+    };
     (0..4).fold(0, |new_board, row_idx| {
-        let row_val = extract_line(board, row_idx);
-        let new_row_val = match move_dir {
-            Move::Left => unsafe { STORES.shift_left.get_unchecked(row_val as usize) },
-            Move::Right => unsafe { STORES.shift_right.get_unchecked(row_val as usize) },
-            _ => panic!("Trying to move up or down in shift rows"),
-        };
+        let row_val = extract_line(board, row_idx) as u16;
+        let new_row_val = get_line_entry(table, row_val);
         new_board | (new_row_val << (48 - (16 * row_idx)))
     })
 }
 
 fn shift_cols(board: Board, move_dir: Move) -> Board {
     let transpose_board = transpose(board);
+    let s = stores();
+    let table: &[Board] = match move_dir {
+        Move::Up => &s.shift_up,
+        Move::Down => &s.shift_down,
+        _ => panic!("Trying to move left or right in shift cols"),
+    };
     (0..4).fold(0, |new_board, col_idx| {
-        let col_val = extract_line(transpose_board, col_idx);
-        let new_col_val = match move_dir {
-            Move::Up => unsafe { STORES.shift_up.get_unchecked(col_val as usize) },
-            Move::Down => unsafe { STORES.shift_down.get_unchecked(col_val as usize) },
-            _ => panic!("Trying to move left or right in shift cols"),
-        };
+        let col_val = extract_line(transpose_board, col_idx) as u16;
+        let new_col_val = get_line_entry(table, col_val);
         new_board | (new_col_val << (12 - (4 * col_idx)))
     })
 }
@@ -230,7 +257,7 @@ fn shift_vec(vec: Vec<Tile>, direction: Move) -> Vec<Tile> {
 
 fn shift_vec_right(vec: Vec<Tile>) -> Vec<Tile> {
     let rev_vec: Vec<Tile> = vec.into_iter().rev().collect();
-    shift_vec_left(rev_vec).iter().rev().map(|&x| x).collect()
+    shift_vec_left(rev_vec).iter().rev().copied().collect()
 }
 
 fn shift_vec_left(mut vec: Vec<Tile>) -> Vec<Tile> {
@@ -262,8 +289,7 @@ fn calculate_left_shift(slice: &mut [Tile]) {
 fn calc_score(line: Line) -> Score {
     let mut score = 0;
     let tiles = line_to_vec(line);
-    for i in 0..4 {
-        let tile_val = tiles[i];
+    for &tile_val in tiles.iter().take(4) {
         if tile_val >= 2 {
             // the score is the total sum of the tile and all intermediate merged tiles
             score += (tile_val - 1) * (1 << tile_val);
@@ -294,7 +320,7 @@ fn extract_tile(board: Board, idx: usize) -> Tile {
 
 fn format_val(val: &u8) -> String {
     match val {
-        0 => return String::from("       "),
+        0 => String::from("       "),
         &x => {
             let mut x = (2_i32.pow(x as u32)).to_string();
             while x.len() < 7 {

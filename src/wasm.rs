@@ -26,6 +26,7 @@ impl WasmExpectimax {
     //    }
     //}
 
+    #[allow(dead_code)]
     fn get_possible_move(&self, board: Board) -> i32 {
         for &direction in &[Move::Up, Move::Down, Move::Left, Move::Right] {
             let new_board = GameEngine::shift(board, direction);
