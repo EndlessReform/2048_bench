@@ -14,3 +14,7 @@ rand = "0.8"
 wasm-bindgen = "0.2"
 # Ensure RNG works on wasm32-unknown-unknown by enabling JS entropy source
 getrandom = { version = "0.2", features = ["js"] }
+rayon = "1"
+dashmap = "5"
+ahash = "0.8"
+indicatif = "0.17"

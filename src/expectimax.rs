@@ -1,14 +1,21 @@
 use crate::engine as GameEngine;
 use crate::engine::{Board, Move};
 use std::collections::HashMap;
-use std::thread;
+use dashmap::DashMap;
+use rayon::prelude::*;
+use std::sync::OnceLock;
+use ahash::RandomState as AHasher;
 
-static mut HEURISTIC_SCORES: [f64; 0xffff] = [0.; 0xffff];
+static HEURISTIC_SCORES: OnceLock<Box<[f64]>> = OnceLock::new();
 
-unsafe fn create_heuristic_score_table() {
-    for (i, slot) in HEURISTIC_SCORES.iter_mut().enumerate() {
-        *slot = calc_heuristic_score(i as u64);
-    }
+fn heuristic_scores() -> &'static [f64] {
+    HEURISTIC_SCORES.get_or_init(|| {
+        let mut v = vec![0.0f64; 0x1_0000];
+        for (i, slot) in v.iter_mut().enumerate() {
+            *slot = calc_heuristic_score(i as u64);
+        }
+        v.into_boxed_slice()
+    }).as_ref()
 }
 
 // Three cases:
@@ -43,7 +50,7 @@ pub struct Expectimax(pub u64, pub u64);
 
 impl Expectimax {
     pub fn new() -> Self {
-        unsafe { create_heuristic_score_table() };
+        let _ = heuristic_scores();
         Expectimax(0, 0)
     }
 
@@ -172,13 +179,13 @@ pub struct ExpectimaxMultithread;
 
 impl ExpectimaxMultithread {
     pub fn new() -> Self {
-        unsafe { create_heuristic_score_table() };
+        let _ = heuristic_scores();
         ExpectimaxMultithread
     }
 
     pub fn get_next_move(&mut self, board: Board) -> Option<Move> {
         let depth = 3.max(count_unique(board) - 2) as u64;
-        evaluate_multithread(board, depth, 1.).move_dir
+        evaluate_parallel(board, depth, 1.).move_dir
     }
 }
 
@@ -188,67 +195,176 @@ impl Default for ExpectimaxMultithread {
     }
 }
 
-fn evaluate_multithread(
-    board: Board,
-    move_depth: u64,
-    cum_prob: f32,
-) -> ExpectimaxResult {
-    let mut threads = vec![];
-    for &direction in &[Move::Up, Move::Down, Move::Left, Move::Right] {
-        // spawn computation threads using function and push to vec
-        let board_copy = board;
-        threads.push(spawn_move_computation(
-            board_copy, move_depth, cum_prob, direction,
-        ));
-    }
+fn evaluate_parallel(board: Board, move_depth: u64, cum_prob: f32) -> ExpectimaxResult {
+    // Shared transposition table across parallel tasks (fast hasher)
+    let map: DashMap<Board, TranspositionEntry, AHasher> = DashMap::with_hasher(AHasher::new());
 
-    let mut best_result = ExpectimaxResult {
-        score: 0.,
-        move_dir: None,
-    };
-    for thread in threads {
-        let result = thread.join().unwrap();
-        if result.score > best_result.score {
-            best_result = result;
-        }
-    }
-    best_result
+    // Evaluate each direction in parallel, keeping best score and move
+    let directions = [Move::Up, Move::Down, Move::Left, Move::Right];
+    let best = directions
+        .par_iter()
+        .map(|&dir| {
+            let new_board = GameEngine::shift(board, dir);
+            if new_board == board {
+                return ExpectimaxResult { score: 0.0, move_dir: None };
+            }
+            let score = expectimax_parallel(
+                new_board,
+                Node::Chance,
+                move_depth,
+                cum_prob,
+                &map,
+            );
+            ExpectimaxResult { score, move_dir: Some(dir) }
+        })
+        .reduce(
+            || ExpectimaxResult { score: 0.0, move_dir: None },
+            |a, b| if a.score >= b.score { a } else { b },
+        );
+    best
 }
 
-fn spawn_move_computation(
+fn expectimax_parallel(
+    board: Board,
+    node: Node,
+    move_depth: u64,
+    cum_prob: f32,
+    map: &DashMap<Board, TranspositionEntry, AHasher>,
+) -> f64 {
+    match node {
+        Node::Max => evaluate_max_parallel(board, move_depth, cum_prob, map),
+        Node::Chance => evaluate_chance_parallel(board, move_depth, cum_prob, map),
+    }
+}
+
+fn evaluate_max_parallel(
     board: Board,
     move_depth: u64,
     cum_prob: f32,
-    direction: Move,
-) -> thread::JoinHandle<ExpectimaxResult> {
-    thread::spawn(move || {
-        let new_board;
-        match direction {
-            Move::Up => new_board = GameEngine::shift(board, Move::Up),
-            Move::Down => new_board = GameEngine::shift(board, Move::Down),
-            Move::Left => new_board = GameEngine::shift(board, Move::Left),
-            Move::Right => new_board = GameEngine::shift(board, Move::Right),
-        }
-        if new_board != board {
-            return ExpectimaxResult {
-                score: expectimax(
-                    new_board,
-                    Node::Chance,
-                    move_depth,
-                    cum_prob,
-                    &mut HashMap::new(),
-                    &mut 0
-                )
-                .score,
-                move_dir: Some(direction),
-            };
-        }
+    map: &DashMap<Board, TranspositionEntry, AHasher>,
+) -> f64 {
+    let directions = [Move::Up, Move::Down, Move::Left, Move::Right];
+    const MAX_PAR_DEPTH_THRESHOLD: u64 = 4;
+    if move_depth >= MAX_PAR_DEPTH_THRESHOLD {
+        directions
+            .par_iter()
+            .map(|&dir| {
+                let new_board = GameEngine::shift(board, dir);
+                if new_board == board {
+                    0.0
+                } else {
+                    expectimax_parallel(new_board, Node::Chance, move_depth, cum_prob, map)
+                }
+            })
+            .reduce(|| 0.0, |a, b| a.max(b))
+    } else {
+        directions.iter().fold(0.0, |acc, &dir| {
+            let new_board = GameEngine::shift(board, dir);
+            if new_board == board {
+                acc.max(0.0)
+            } else {
+                acc.max(expectimax_parallel(new_board, Node::Chance, move_depth, cum_prob, map))
+            }
+        })
+    }
+}
 
-        ExpectimaxResult {
-            score: 0.,
-            move_dir: None,
+fn evaluate_chance_parallel(
+    board: Board,
+    move_depth: u64,
+    cum_prob: f32,
+    map: &DashMap<Board, TranspositionEntry, AHasher>,
+) -> f64 {
+    if move_depth == 0 || cum_prob < 0.0001 {
+        return get_heurisitic_score(board);
+    }
+
+    if let Some(entry) = map.get(&board) {
+        if entry.move_depth >= move_depth {
+            return entry.score;
         }
-    })
+    }
+
+    let num_empty_tiles = GameEngine::count_empty(board) as usize;
+    if num_empty_tiles == 0 {
+        return get_heurisitic_score(board);
+    }
+
+    // Collect insertion positions (as nibble masks like in the sequential version)
+    let mut slots = Vec::with_capacity(num_empty_tiles);
+    let mut tiles_searched = 0;
+    let mut tmp = board;
+    let mut insert_tile = 1u64;
+    while tiles_searched < num_empty_tiles {
+        if (tmp & 0xf) == 0 {
+            slots.push(insert_tile);
+            tiles_searched += 1;
+        }
+        tmp >>= 4;
+        insert_tile <<= 4;
+    }
+
+    let base_prob = cum_prob / (num_empty_tiles as f32);
+
+    // Thresholds to avoid parallel overhead on tiny branches
+    const PAR_DEPTH_THRESHOLD: u64 = 4;
+    const PAR_SLOTS_THRESHOLD: usize = 6;
+    const CACHE_DEPTH_THRESHOLD: u64 = 3; // avoid cache writes when shallow
+
+    let sum: f64 = if move_depth >= PAR_DEPTH_THRESHOLD && slots.len() >= PAR_SLOTS_THRESHOLD {
+        slots
+            .par_iter()
+            .map(|&ins| {
+                let new_board_2 = board | ins;
+                let s2 = expectimax_parallel(
+                    new_board_2,
+                    Node::Max,
+                    move_depth - 1,
+                    base_prob * 0.9,
+                    map,
+                ) * 0.9;
+
+                let new_board_4 = board | (ins << 1);
+                let s4 = expectimax_parallel(
+                    new_board_4,
+                    Node::Max,
+                    move_depth - 1,
+                    base_prob * 0.1,
+                    map,
+                ) * 0.1;
+
+                s2 + s4
+            })
+            .sum()
+    } else {
+        slots.iter().fold(0.0, |acc, &ins| {
+            let new_board_2 = board | ins;
+            let s2 = expectimax_parallel(
+                new_board_2,
+                Node::Max,
+                move_depth - 1,
+                base_prob * 0.9,
+                map,
+            ) * 0.9;
+
+            let new_board_4 = board | (ins << 1);
+            let s4 = expectimax_parallel(
+                new_board_4,
+                Node::Max,
+                move_depth - 1,
+                base_prob * 0.1,
+                map,
+            ) * 0.1;
+
+            acc + s2 + s4
+        })
+    };
+
+    let score = sum / (num_empty_tiles as f64);
+    if move_depth >= CACHE_DEPTH_THRESHOLD {
+        map.insert(board, TranspositionEntry { score, move_depth });
+    }
+    score
 }
 
 // Credit to Nneonneo
@@ -276,8 +392,9 @@ fn get_heurisitic_score(board: Board) -> f64 {
     (0..4).fold(0., |score, line_idx| {
         let row_val = GameEngine::extract_line(board, line_idx);
         let col_val = GameEngine::extract_line(transpose_board, line_idx);
-        let row_score = unsafe { HEURISTIC_SCORES.get_unchecked(row_val as usize) };
-        let col_score = unsafe { HEURISTIC_SCORES.get_unchecked(col_val as usize) };
+        let scores = heuristic_scores();
+        let row_score = unsafe { scores.get_unchecked(row_val as usize) };
+        let col_score = unsafe { scores.get_unchecked(col_val as usize) };
         score + row_score + col_score
     })
 }
@@ -358,5 +475,39 @@ mod tests {
         assert_eq!(count_unique(game), 3);
         let game = 0x0000010000000010;
         assert_eq!(count_unique(game), 1);
+    }
+
+    #[test]
+    fn parallel_matches_singlethread_moves() {
+        // Ensure engine tables are initialized
+        GameEngine::new();
+
+        // A selection of fixed boards covering various shapes
+        let boards: &[Board] = &[
+            0x0000_0000_0000_0000,
+            0x0000_0000_0000_0011,
+            0x1000_1000_0000_0000,
+            0x1121_2300_3300_4222,
+            0x1234_1332_2002_1002,
+            0x0001_0002_0003_0004,
+            0x4321_0000_0000_0000,
+            0x1111_0000_1111_0000,
+        ];
+
+        for &b in boards {
+            let mut s = Expectimax::new();
+            let mut p = ExpectimaxMultithread::new();
+
+            let m1 = s.get_next_move(b);
+            let m2 = p.get_next_move(b);
+
+            // Compare moves without requiring PartialEq on Move
+            let eq = match (m1, m2) {
+                (None, None) => true,
+                (Some(a), Some(b)) => std::mem::discriminant(&a) == std::mem::discriminant(&b),
+                _ => false,
+            };
+            assert!(eq, "Mismatch on board {:016x}", b);
+        }
     }
 }
