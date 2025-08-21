@@ -1,4 +1,3 @@
-use bitintr::Popcnt;
 use rand::Rng;
 
 #[derive(Debug, Clone, Copy)]
@@ -154,7 +153,7 @@ unsafe fn create_stores() {
 // Credit to Nneonneo
 pub fn insert_random_tile(board: Board) -> Board {
     let mut rng = rand::thread_rng();
-    let mut index = rng.gen_range(0, count_empty(board));
+    let mut index = rng.gen_range(0..count_empty(board));
     let mut tmp = board;
     let mut tile = generate_random_tile();
     loop {
@@ -174,7 +173,7 @@ pub fn insert_random_tile(board: Board) -> Board {
 
 fn generate_random_tile() -> Tile {
     let mut rng = rand::thread_rng();
-    if rng.gen_range(0, 10) < 9 {
+    if rng.gen_range(0..10) < 9 {
         1
     } else {
         2
@@ -278,7 +277,7 @@ fn count_non_empty(board: Board) -> u64 {
     board_copy |= board_copy >> 1;
     board_copy |= board_copy >> 2;
     board_copy &= 0x1111111111111111;
-    board_copy.popcnt()
+    board_copy.count_ones() as u64
 }
 
 pub fn to_vec(board: Board) -> Vec<u8> {
