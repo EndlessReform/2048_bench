@@ -1,6 +1,8 @@
 use rand::Rng;
+use std::fmt;
 use std::sync::OnceLock;
 
+/// A direction to move/merge tiles.
 #[derive(Debug, Clone, Copy)]
 pub enum Move {
     Up,
@@ -12,39 +14,200 @@ pub enum Move {
 const LINE_TABLE_SIZE: usize = 0x1_0000; // 65,536 possible 16-bit lines
 
 struct Stores {
-    shift_left: Box<[Board]>,
-    shift_right: Box<[Board]>,
-    shift_up: Box<[Board]>,
-    shift_down: Box<[Board]>,
+    shift_left: Box<[u64]>,
+    shift_right: Box<[u64]>,
+    shift_up: Box<[u64]>,
+    shift_down: Box<[u64]>,
     score: Box<[Score]>,
 }
 
-pub type Board = u64;
+type BoardRaw = u64;
 type Line = u64;
 type Tile = u64;
 type Score = u64;
 
+/// Packed 4x4 2048 board as 16 4-bit nibbles in a `u64`.
+///
+/// Public methods provide ergonomic, safe operations while preserving
+/// an escape hatch to the raw packed representation for advanced use.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Board(BoardRaw);
+
+impl Board {
+    /// A constant empty board (all zeros).
+    pub const EMPTY: Board = Board(0);
+
+    /// Construct a `Board` from its raw packed representation.
+    #[inline]
+    pub fn from_raw(raw: BoardRaw) -> Self { Board(raw) }
+
+    /// Consume this `Board`, returning the raw packed `u64`.
+    #[inline]
+    pub fn into_raw(self) -> BoardRaw { self.0 }
+
+    /// Borrow the raw packed `u64` for this `Board`.
+    #[inline]
+    pub fn raw(&self) -> BoardRaw { self.0 }
+
+    /// Return the board resulting from sliding/merging tiles in `dir` (no random insert).
+    ///
+    /// Example
+    /// ```
+    /// use ai_2048::engine::{self as GameEngine, Board, Move};
+    /// GameEngine::new();
+    /// let b = Board::EMPTY;
+    /// let _ = b.shift(Move::Left);
+    /// ```
+    #[inline]
+    pub fn shift(self, dir: Move) -> Self {
+        match dir {
+            Move::Left | Move::Right => shift_rows(self, dir),
+            Move::Up | Move::Down => shift_cols(self, dir),
+        }
+    }
+
+    /// Insert a random 2 (90%) or 4 (10%) tile into a random empty slot, using the provided RNG.
+    ///
+    /// Deterministic example using a seeded RNG:
+    /// ```
+    /// use ai_2048::engine::{self as GameEngine, Board};
+    /// use rand::{SeedableRng, rngs::StdRng};
+    /// GameEngine::new();
+    /// let mut rng = StdRng::seed_from_u64(123);
+    /// let b = Board::EMPTY.with_random_tile(&mut rng).with_random_tile(&mut rng);
+    /// assert!(b.count_empty() <= 14);
+    /// ```
+    #[inline]
+    pub fn with_random_tile<R: Rng + ?Sized>(self, rng: &mut R) -> Self {
+        let mut index = rng.gen_range(0..count_empty(self));
+        let mut tmp = self.0;
+        let mut tile = generate_random_tile(rng);
+        loop {
+            while (tmp & 0xf) != 0 {
+                tmp >>= 4;
+                tile <<= 4;
+            }
+            if index == 0 { break; }
+            index -= 1;
+            tmp >>= 4;
+            tile <<= 4;
+        }
+        Board(self.0 | tile)
+    }
+
+    /// Convenience: like `with_random_tile` but uses thread-local RNG.
+    ///
+    /// ```
+    /// use ai_2048::engine::{self as GameEngine, Board};
+    /// GameEngine::new();
+    /// let b = Board::EMPTY.with_random_tile_thread();
+    /// assert!(b.count_empty() <= 15);
+    /// ```
+    #[inline]
+    pub fn with_random_tile_thread(self) -> Self {
+        let mut rng = rand::thread_rng();
+        self.with_random_tile(&mut rng)
+    }
+
+    /// Perform a move then insert a random tile if the move changed the board, using the provided RNG.
+    ///
+    /// ```
+    /// use ai_2048::engine::{self as GameEngine, Board, Move};
+    /// use rand::{SeedableRng, rngs::StdRng};
+    /// GameEngine::new();
+    /// let mut rng = StdRng::seed_from_u64(1);
+    /// let b0 = Board::EMPTY.with_random_tile(&mut rng).with_random_tile(&mut rng);
+    /// let _b1 = b0.make_move(Move::Up, &mut rng);
+    /// ```
+    #[inline]
+    pub fn make_move<R: Rng + ?Sized>(self, direction: Move, rng: &mut R) -> Self {
+        let moved = self.shift(direction);
+        if moved != self { moved.with_random_tile(rng) } else { self }
+    }
+
+    /// Compute the total score for this board.
+    ///
+    /// ```
+    /// use ai_2048::engine::{self as GameEngine, Board};
+    /// GameEngine::new();
+    /// let b = Board::EMPTY;
+    /// let _ = b.score();
+    /// ```
+    #[inline]
+    pub fn score(self) -> Score { get_score(self) }
+
+    /// Return true if no legal moves remain.
+    ///
+    /// ```
+    /// use ai_2048::engine::{self as GameEngine, Board};
+    /// GameEngine::new();
+    /// // On an empty board, shifting in any direction doesn't change the board,
+    /// // so `is_game_over` returns true (no merges/moves possible without a new tile).
+    /// assert!(Board::EMPTY.is_game_over());
+    /// ```
+    #[inline]
+    pub fn is_game_over(self) -> bool { is_game_over(self) }
+
+    /// Return the highest tile value (e.g., 2048) present on the board.
+    #[inline]
+    pub fn highest_tile(self) -> Tile { get_highest_tile_val(self) }
+
+    /// Count the number of empty cells on the board.
+    #[inline]
+    pub fn count_empty(self) -> u64 { count_empty(self) }
+
+    /// Get the actual value at index (2^exponent stored at nibble).
+    ///
+    /// Index runs 0..16 row-major.
+    #[inline]
+    pub fn tile_value(self, idx: usize) -> u16 { get_tile_val(self, idx) }
+}
+
+impl fmt::Debug for Board {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Board({:#018x})", self.0)
+    }
+}
+
+impl fmt::Display for Board {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let board: Vec<_> = to_vec(*self).iter().map(format_val).collect();
+        write!(
+            f,
+            "\n{}|{}|{}|{}\n--------------------------------\n{}|{}|{}|{}\n--------------------------------\n{}|{}|{}|{}\n--------------------------------\n{}|{}|{}|{}\n",
+            board[0], board[1], board[2], board[3],
+            board[4], board[5], board[6], board[7],
+            board[8], board[9], board[10], board[11],
+            board[12], board[13], board[14], board[15]
+        )
+    }
+}
+
+impl From<BoardRaw> for Board { fn from(v: BoardRaw) -> Self { Board::from_raw(v) } }
+impl From<Board> for BoardRaw { fn from(b: Board) -> Self { b.into_raw() } }
+
+/// Initialize internal tables on first use. Safe to call multiple times.
 pub fn new() {
     // Ensure lookup tables are initialized
     STORES.get_or_init(create_stores);
 }
 
+/// Compute the total score for a board.
 pub fn get_score(board: Board) -> Score {
     let score_table = &stores().score;
     (0..4).fold(0, |acc, idx| {
-        let row_val = extract_line(board, idx) as u16;
+        let row_val = extract_line(board.0, idx) as u16;
         acc + unsafe { *score_table.get_unchecked(row_val as usize) }
     })
 }
 
+/// Perform a move then insert a random tile if the move changed the board (uses thread RNG).
 pub fn make_move(board: Board, direction: Move) -> Board {
-    let new_board = shift(board, direction);
-    if board != new_board {
-        return insert_random_tile(new_board);
-    }
-    board
+    let mut rng = rand::thread_rng();
+    board.make_move(direction, &mut rng)
 }
 
+/// Slide/merge tiles in the given direction. No randomness.
 pub fn shift(board: Board, direction: Move) -> Board {
     match direction {
         Move::Left | Move::Right => shift_rows(board, direction),
@@ -53,7 +216,7 @@ pub fn shift(board: Board, direction: Move) -> Board {
 }
 
 // Credit to Nneonneo
-pub fn transpose(x: Board) -> Board {
+pub(crate) fn transpose(x: BoardRaw) -> BoardRaw {
     let a1 = x & 0xF0F00F0FF0F00F0F;
     let a2 = x & 0x0000F0F00000F0F0;
     let a3 = x & 0x0F0F00000F0F0000;
@@ -64,12 +227,13 @@ pub fn transpose(x: Board) -> Board {
     b1 | (b2 >> 24) | (b3 << 24)
 }
 
-pub fn extract_line(board: Board, line_idx: u64) -> Line {
+pub(crate) fn extract_line(board: BoardRaw, line_idx: u64) -> Line {
     (board >> ((3 - line_idx) * 16)) & 0xffff
 }
 
+/// Return the cell’s actual value (0 if empty), e.g., 2, 4, 8, ...
 pub fn get_tile_val(board: Board, idx: usize) -> u16 {
-    2_u16.pow(((board >> (60 - (4 * idx))) & 0xf) as u32)
+    2_u16.pow(((board.0 >> (60 - (4 * idx))) & 0xf) as u32)
 }
 
 pub fn line_to_vec(line: Line) -> Vec<Tile> {
@@ -79,8 +243,9 @@ pub fn line_to_vec(line: Line) -> Vec<Tile> {
     })
 }
 
+/// True if no move in any direction changes the board.
 pub fn is_game_over(board: Board) -> bool {
-    for direction in vec![Move::Up, Move::Down, Move::Left, Move::Right] {
+    for direction in [Move::Up, Move::Down, Move::Left, Move::Right] {
         let new_board = shift(board, direction);
         if new_board != board {
             return false;
@@ -90,40 +255,12 @@ pub fn is_game_over(board: Board) -> bool {
 }
 
 // https://stackoverflow.com/questions/38225571/count-number-of-zero-nibbles-in-an-unsigned-64-bit-integer
+/// Count the number of zero tiles.
 pub fn count_empty(board: Board) -> u64 {
     16 - count_non_empty(board)
 }
 
-pub fn to_str(board: Board) -> String {
-    let board: Vec<_> = to_vec(board).iter().map(format_val).collect();
-    format!(
-        "\r
-        {}|{}|{}|{}\r
-        --------------------------------\r
-        {}|{}|{}|{}\r
-        --------------------------------\r
-        {}|{}|{}|{}\r
-        --------------------------------\r
-        {}|{}|{}|{}\r
-        ",
-        board[0],
-        board[1],
-        board[2],
-        board[3],
-        board[4],
-        board[5],
-        board[6],
-        board[7],
-        board[8],
-        board[9],
-        board[10],
-        board[11],
-        board[12],
-        board[13],
-        board[14],
-        board[15]
-    )
-}
+// Pretty-printing is provided via Display for Board
 
 static STORES: OnceLock<Stores> = OnceLock::new();
 
@@ -161,7 +298,7 @@ fn stores() -> &'static Stores {
 }
 
 #[inline(always)]
-fn get_line_entry(table: &[Board], idx: u16) -> Board {
+fn get_line_entry(table: &[u64], idx: u16) -> u64 {
     debug_assert!((idx as usize) < LINE_TABLE_SIZE);
     unsafe { *table.get_unchecked(idx as usize) }
 }
@@ -173,63 +310,42 @@ fn get_score_entry(idx: u16) -> Score {
     unsafe { *score_table.get_unchecked(idx as usize) }
 }
 
-// Credit to Nneonneo
-pub fn insert_random_tile(board: Board) -> Board {
-    let mut rng = rand::thread_rng();
-    let mut index = rng.gen_range(0..count_empty(board));
-    let mut tmp = board;
-    let mut tile = generate_random_tile();
-    loop {
-        while (tmp & 0xf) != 0 {
-            tmp >>= 4;
-            tile <<= 4;
-        }
-        if index == 0 {
-            break;
-        }
-        index -= 1;
-        tmp >>= 4;
-        tile <<= 4;
-    }
-    return board | tile;
-}
+/// Insert a random 2 (90%) or 4 (10%) tile using thread-local RNG.
+///
+/// For reproducible behavior, prefer `Board::with_random_tile(&mut impl Rng)`.
+pub fn insert_random_tile(board: Board) -> Board { board.with_random_tile_thread() }
 
-fn generate_random_tile() -> Tile {
-    let mut rng = rand::thread_rng();
-    if rng.gen_range(0..10) < 9 {
-        1
-    } else {
-        2
-    }
-}
+fn generate_random_tile<R: Rng + ?Sized>(rng: &mut R) -> Tile { if rng.gen_range(0..10) < 9 { 1 } else { 2 } }
 
 fn shift_rows(board: Board, move_dir: Move) -> Board {
     let s = stores();
-    let table: &[Board] = match move_dir {
+    let table: &[u64] = match move_dir {
         Move::Left => &s.shift_left,
         Move::Right => &s.shift_right,
         _ => panic!("Trying to move up or down in shift rows"),
     };
-    (0..4).fold(0, |new_board, row_idx| {
-        let row_val = extract_line(board, row_idx) as u16;
+    let res = (0..4).fold(0, |new_board, row_idx| {
+        let row_val = extract_line(board.0, row_idx) as u16;
         let new_row_val = get_line_entry(table, row_val);
         new_board | (new_row_val << (48 - (16 * row_idx)))
-    })
+    });
+    Board(res)
 }
 
 fn shift_cols(board: Board, move_dir: Move) -> Board {
-    let transpose_board = transpose(board);
+    let transpose_board = transpose(board.0);
     let s = stores();
-    let table: &[Board] = match move_dir {
+    let table: &[u64] = match move_dir {
         Move::Up => &s.shift_up,
         Move::Down => &s.shift_down,
         _ => panic!("Trying to move left or right in shift cols"),
     };
-    (0..4).fold(0, |new_board, col_idx| {
+    let res = (0..4).fold(0, |new_board, col_idx| {
         let col_val = extract_line(transpose_board, col_idx) as u16;
         let new_col_val = get_line_entry(table, col_val);
         new_board | (new_col_val << (12 - (4 * col_idx)))
-    })
+    });
+    Board(res)
 }
 
 fn shift_line(line: Line, direction: Move) -> Line {
@@ -299,14 +415,14 @@ fn calc_score(line: Line) -> Score {
 }
 
 fn count_non_empty(board: Board) -> u64 {
-    let mut board_copy = board;
+    let mut board_copy = board.0;
     board_copy |= board_copy >> 1;
     board_copy |= board_copy >> 2;
     board_copy &= 0x1111111111111111;
     board_copy.count_ones() as u64
 }
 
-pub fn to_vec(board: Board) -> Vec<u8> {
+pub(crate) fn to_vec(board: Board) -> Vec<u8> {
     (0..16).fold(Vec::new(), |mut vec, idx| {
         let num = extract_tile(board, idx);
         vec.push(num as u8);
@@ -315,7 +431,7 @@ pub fn to_vec(board: Board) -> Vec<u8> {
 }
 
 fn extract_tile(board: Board, idx: usize) -> Tile {
-    (board >> ((15 - idx) * 4)) & 0xf
+    (board.0 >> ((15 - idx) * 4)) & 0xf
 }
 
 fn format_val(val: &u8) -> String {
@@ -343,7 +459,7 @@ pub fn get_highest_tile_val(board: Board) -> Tile {
 }
 
 fn get_tile(board: Board, idx: usize) -> Tile {
-    (board >> (60 - (4 * idx))) & 0xf
+    (board.0 >> (60 - (4 * idx))) & 0xf
 }
 
 #[cfg(test)]
@@ -369,7 +485,7 @@ mod tests {
 
     #[test]
     fn it_test_insert_random_tile() {
-        let mut game = 0;
+        let mut game = Board::EMPTY;
         for _ in 0..16 {
             game = insert_random_tile(game);
         }
@@ -379,67 +495,67 @@ mod tests {
     #[test]
     fn test_shift_left() {
         new();
-        assert_eq!(shift(0x0000, Move::Left), 0x0000);
-        assert_eq!(shift(0x0002, Move::Left), 0x2000);
-        assert_eq!(shift(0x2020, Move::Left), 0x3000);
-        assert_eq!(shift(0x1332, Move::Left), 0x1420);
-        assert_eq!(shift(0x1234, Move::Left), 0x1234);
-        assert_eq!(shift(0x1002, Move::Left), 0x1200);
-        assert_ne!(shift(0x1210, Move::Left), 0x2200);
+        assert_eq!(shift(Board::from_raw(0x0000), Move::Left), Board::from_raw(0x0000));
+        assert_eq!(shift(Board::from_raw(0x0002), Move::Left), Board::from_raw(0x2000));
+        assert_eq!(shift(Board::from_raw(0x2020), Move::Left), Board::from_raw(0x3000));
+        assert_eq!(shift(Board::from_raw(0x1332), Move::Left), Board::from_raw(0x1420));
+        assert_eq!(shift(Board::from_raw(0x1234), Move::Left), Board::from_raw(0x1234));
+        assert_eq!(shift(Board::from_raw(0x1002), Move::Left), Board::from_raw(0x1200));
+        assert_ne!(shift(Board::from_raw(0x1210), Move::Left), Board::from_raw(0x2200));
     }
 
     #[test]
     fn test_shift_right() {
         new();
-        assert_eq!(shift(0x0000, Move::Right), 0x0000);
-        assert_eq!(shift(0x2000, Move::Right), 0x0002);
-        assert_eq!(shift(0x2020, Move::Right), 0x0003);
-        assert_eq!(shift(0x1332, Move::Right), 0x0142);
-        assert_eq!(shift(0x1234, Move::Right), 0x1234);
-        assert_eq!(shift(0x1002, Move::Right), 0x0012);
-        assert_ne!(shift(0x0121, Move::Right), 0x0022);
+        assert_eq!(shift(Board::from_raw(0x0000), Move::Right), Board::from_raw(0x0000));
+        assert_eq!(shift(Board::from_raw(0x2000), Move::Right), Board::from_raw(0x0002));
+        assert_eq!(shift(Board::from_raw(0x2020), Move::Right), Board::from_raw(0x0003));
+        assert_eq!(shift(Board::from_raw(0x1332), Move::Right), Board::from_raw(0x0142));
+        assert_eq!(shift(Board::from_raw(0x1234), Move::Right), Board::from_raw(0x1234));
+        assert_eq!(shift(Board::from_raw(0x1002), Move::Right), Board::from_raw(0x0012));
+        assert_ne!(shift(Board::from_raw(0x0121), Move::Right), Board::from_raw(0x0022));
     }
 
     #[test]
     fn test_move_left() {
         new();
-        let game = 0x1234133220021002;
+        let game = Board::from_raw(0x1234133220021002);
         let game = shift(game, Move::Left);
-        assert_eq!(game, 0x1234142030001200);
+        assert_eq!(game, Board::from_raw(0x1234142030001200));
     }
 
     #[test]
     fn test_move_up() {
         new();
-        let game = 0x1121230033004222;
+        let game = Board::from_raw(0x1121230033004222);
         let game = shift(game, Move::Up);
-        assert_eq!(game, 0x1131240232004000);
+        assert_eq!(game, Board::from_raw(0x1131240232004000));
     }
 
     #[test]
     fn test_move_right() {
         new();
-        let game = 0x1234133220021002;
+        let game = Board::from_raw(0x1234133220021002);
         let game = shift(game, Move::Right);
-        assert_eq!(game, 0x1234014200030012);
+        assert_eq!(game, Board::from_raw(0x1234014200030012));
     }
 
     #[test]
     fn test_move_down() {
         new();
-        let game = 0x1121230033004222;
+        let game = Board::from_raw(0x1121230033004222);
         let game = shift(game, Move::Down);
-        assert_eq!(game, 0x1000210034014232);
+        assert_eq!(game, Board::from_raw(0x1000210034014232));
     }
 
     #[test]
     fn it_count_empty() {
-        let game = 0x1111000011110000;
+        let game = Board::from_raw(0x1111000011110000);
         assert_eq!(count_empty(game), 8);
-        assert_eq!(game, 0x1111000011110000);
-        let game = 0x1100000000000000;
+        assert_eq!(game, Board::from_raw(0x1111000011110000));
+        let game = Board::from_raw(0x1100000000000000);
         assert_eq!(count_empty(game), 14);
-        assert_eq!(game, 0x1100000000000000);
+        assert_eq!(game, Board::from_raw(0x1100000000000000));
     }
 
     //#[test]
@@ -454,13 +570,13 @@ mod tests {
 
     #[test]
     fn it_count_non_empty() {
-        let game = 0x1134000000000000;
+        let game = Board::from_raw(0x1134000000000000);
         assert_eq!(count_non_empty(game), 4);
     }
 
     #[test]
     fn it_get_tile_val() {
-        let game = 0x123456789abcdef;
+        let game = Board::from_raw(0x0123456789abcdef);
         assert_eq!(get_tile_val(game, 3), 8);
         assert_eq!(get_tile_val(game, 10), 1024);
         assert_eq!(get_tile_val(game, 15), 32768);

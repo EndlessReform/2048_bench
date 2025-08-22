@@ -9,6 +9,30 @@ The engine compiles to wasm and therefore can be ran in the browser. See it in a
 - **Run (single-threaded)**: `cargo run`
 - **Run (parallel)**: `cargo run --bin parallel [-- <flags>]`
 
+## Documentation
+
+Build and open the Rust API docs locally:
+
+- Build docs: `cargo doc`
+- Open docs: `cargo doc --open`
+
+Notes:
+- Docs build without WASM by default. Include `--features wasm` to document the WASM bindings.
+- Doctests run with `cargo test` (examples in the docs are compiled and executed).
+
+Quick example (from the docs):
+
+```rust
+use ai_2048::engine::{self as GameEngine, Board, Move};
+use rand::{rngs::StdRng, SeedableRng};
+
+GameEngine::new();
+let mut rng = StdRng::seed_from_u64(42);
+let b0 = Board::EMPTY.with_random_tile(&mut rng).with_random_tile(&mut rng);
+let b1 = b0.shift(Move::Left);
+assert!(b1.score() >= 0);
+```
+
 **Parallel Runner Flags**
 - `--quiet`: suppress the live status line (no console output during run).
 - `--steps <N>`: stop after N moves (global counter).

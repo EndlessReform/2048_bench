@@ -29,13 +29,13 @@ fn main() {
     let start_wall = trace::now_unix_seconds();
 
     let mut expectimax = ExpectimaxMultithread::new();
-    let mut board: Board = GameEngine::insert_random_tile(0);
-    board = GameEngine::insert_random_tile(board);
+    let mut rng = rand::thread_rng();
+    let mut board: Board = Board::EMPTY.with_random_tile(&mut rng).with_random_tile(&mut rng);
 
     // In-memory trace buffers (zero overhead aside from simple pushes)
     let mut states: Vec<u64> = Vec::with_capacity(1024);
     let mut moves_vec: Vec<u8> = Vec::with_capacity(1024);
-    states.push(board);
+    states.push(board.raw());
 
     // Status line: global moves/sec via indicatif
     let moves = Arc::new(AtomicU64::new(0));
@@ -73,7 +73,7 @@ fn main() {
     let mut move_count: u64 = 0;
     // No board printing in parallel mode
 
-    while !GameEngine::is_game_over(board) {
+    while !board.is_game_over() {
         let direction = expectimax.get_next_move(board);
         if direction.is_none() {
             break;
@@ -82,12 +82,12 @@ fn main() {
         // Record move and resulting state
         let dir = direction.unwrap();
         moves_vec.push(move_to_u8(dir));
-        board = GameEngine::make_move(board, dir);
-        states.push(board);
+        board = board.make_move(dir, &mut rng);
+        states.push(board.raw());
         moves.fetch_add(1, Ordering::Relaxed);
         // Tile cap: cheap check every move
         if let Some(tile_target) = args.stop_tile {
-            let t = get_highest_tile_val(board);
+            let t = board.highest_tile();
             if t >= tile_target { break; }
         }
         if let Some(limit) = args.steps {
@@ -96,7 +96,7 @@ fn main() {
             }
         }
         if move_count % 100 == 0 {
-            let s = get_score(board);
+            let s = board.score();
             score_atomic.store(s, Ordering::Relaxed);
             if let Some(target) = args.stop_score {
                 if s >= target {
@@ -112,7 +112,7 @@ fn main() {
     let final_moves = moves.load(Ordering::Relaxed);
     if let Some(pb) = pb_opt { pb.finish_and_clear(); }
     let elapsed = start.elapsed().as_secs_f64().max(1e-6);
-    let final_score = get_score(board);
+    let final_score = board.score();
     if !args.quiet {
         println!(
             "Moves: {} | moves/sec: {:.1} | score: {}",
@@ -127,12 +127,12 @@ fn main() {
         // Compute metadata in a post-pass to avoid per-move overhead
         let highest_tile = states
             .iter()
-            .map(|&b| get_highest_tile_val(b) as u32)
+            .map(|&b| Board::from_raw(b).highest_tile() as u32)
             .max()
             .unwrap_or(0);
         let max_score = states
             .iter()
-            .map(|&b| get_score(b))
+            .map(|&b| Board::from_raw(b).score())
             .max()
             .unwrap_or(0);
         let meta = Meta {
@@ -215,11 +215,11 @@ fn run_single_game(steps: Option<u64>, stop_score: Option<u64>, stop_tile: Optio
     let start = Instant::now();
     let start_wall = trace::now_unix_seconds();
     let mut expectimax = ExpectimaxMultithread::new();
-    let mut board: Board = GameEngine::insert_random_tile(0);
+    let mut board: Board = GameEngine::insert_random_tile(Board::EMPTY);
     board = GameEngine::insert_random_tile(board);
     let mut states: Vec<u64> = Vec::with_capacity(1024);
     let mut moves_vec: Vec<u8> = Vec::with_capacity(1024);
-    states.push(board);
+    states.push(board.raw());
     let mut move_count: u64 = 0;
     while !GameEngine::is_game_over(board) {
         let direction = expectimax.get_next_move(board);
@@ -228,7 +228,7 @@ fn run_single_game(steps: Option<u64>, stop_score: Option<u64>, stop_tile: Optio
         let dir = direction.unwrap();
         moves_vec.push(move_to_u8(dir));
         board = GameEngine::make_move(board, dir);
-        states.push(board);
+        states.push(board.raw());
         if let Some(limit) = steps { if move_count >= limit { break; } }
         if move_count % 100 == 0 {
             if let Some(target) = stop_score { if get_score(board) >= target { break; } }
@@ -236,8 +236,16 @@ fn run_single_game(steps: Option<u64>, stop_score: Option<u64>, stop_tile: Optio
         }
     }
     let elapsed = start.elapsed().as_secs_f64();
-    let highest_tile = states.iter().map(|&b| get_highest_tile_val(b) as u32).max().unwrap_or(0);
-    let max_score = states.iter().map(|&b| get_score(b)).max().unwrap_or(0);
+    let highest_tile = states
+        .iter()
+        .map(|&b| get_highest_tile_val(Board::from_raw(b)) as u32)
+        .max()
+        .unwrap_or(0);
+    let max_score = states
+        .iter()
+        .map(|&b| get_score(Board::from_raw(b)))
+        .max()
+        .unwrap_or(0);
     Ok((states, moves_vec, elapsed, max_score, highest_tile, start_wall))
 }
 

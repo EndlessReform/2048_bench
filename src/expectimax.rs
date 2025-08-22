@@ -96,12 +96,7 @@ fn evaluate_max(
     let mut best_score = 0.;
     let mut best_move = None;
     for &direction in &[Move::Up, Move::Down, Move::Left, Move::Right] {
-        let new_board = match direction {
-            Move::Up => GameEngine::shift(board, Move::Up),
-            Move::Down => GameEngine::shift(board, Move::Down),
-            Move::Left => GameEngine::shift(board, Move::Left),
-            Move::Right => GameEngine::shift(board, Move::Right),
-        };
+        let new_board = board.shift(direction);
         if new_board != board {
             let score = expectimax(new_board, Node::Chance, move_depth, cum_prob, map, state_count).score;
             if score > best_score {
@@ -142,20 +137,20 @@ fn evaluate_chance(
         }
     }
 
-    let num_empty_tiles = GameEngine::count_empty(board);
+    let num_empty_tiles = board.count_empty();
     let mut tiles_searched = 0;
-    let mut tmp = board;
-    let mut insert_tile = 1;
+    let mut tmp: u64 = board.raw();
+    let mut insert_tile: u64 = 1;
     let mut score = 0.;
     let cum_prob = cum_prob / num_empty_tiles as f32;
 
     while tiles_searched < num_empty_tiles {
         if (tmp & 0xf) == 0 {
-            let new_board = board | insert_tile;
+            let new_board = Board::from_raw(board.raw() | insert_tile);
             score +=
                 expectimax(new_board, Node::Max, move_depth - 1, cum_prob * 0.9, map, state_count).score * 0.9;
 
-            let new_board = board | (insert_tile << 1);
+            let new_board = Board::from_raw(board.raw() | (insert_tile << 1));
             score +=
                 expectimax(new_board, Node::Max, move_depth - 1, cum_prob * 0.1, map, state_count).score * 0.1;
 
@@ -204,7 +199,7 @@ fn evaluate_parallel(board: Board, move_depth: u64, cum_prob: f32) -> Expectimax
     let best = directions
         .par_iter()
         .map(|&dir| {
-            let new_board = GameEngine::shift(board, dir);
+            let new_board = board.shift(dir);
             if new_board == board {
                 return ExpectimaxResult { score: 0.0, move_dir: None };
             }
@@ -249,7 +244,7 @@ fn evaluate_max_parallel(
         directions
             .par_iter()
             .map(|&dir| {
-                let new_board = GameEngine::shift(board, dir);
+                let new_board = board.shift(dir);
                 if new_board == board {
                     0.0
                 } else {
@@ -259,7 +254,7 @@ fn evaluate_max_parallel(
             .reduce(|| 0.0, |a, b| a.max(b))
     } else {
         directions.iter().fold(0.0, |acc, &dir| {
-            let new_board = GameEngine::shift(board, dir);
+            let new_board = board.shift(dir);
             if new_board == board {
                 acc.max(0.0)
             } else {
@@ -285,7 +280,7 @@ fn evaluate_chance_parallel(
         }
     }
 
-    let num_empty_tiles = GameEngine::count_empty(board) as usize;
+    let num_empty_tiles = board.count_empty() as usize;
     if num_empty_tiles == 0 {
         return get_heurisitic_score(board);
     }
@@ -293,7 +288,7 @@ fn evaluate_chance_parallel(
     // Collect insertion positions (as nibble masks like in the sequential version)
     let mut slots = Vec::with_capacity(num_empty_tiles);
     let mut tiles_searched = 0;
-    let mut tmp = board;
+    let mut tmp = board.raw();
     let mut insert_tile = 1u64;
     while tiles_searched < num_empty_tiles {
         if (tmp & 0xf) == 0 {
@@ -315,7 +310,7 @@ fn evaluate_chance_parallel(
         slots
             .par_iter()
             .map(|&ins| {
-                let new_board_2 = board | ins;
+                let new_board_2 = Board::from_raw(board.raw() | ins);
                 let s2 = expectimax_parallel(
                     new_board_2,
                     Node::Max,
@@ -324,7 +319,7 @@ fn evaluate_chance_parallel(
                     map,
                 ) * 0.9;
 
-                let new_board_4 = board | (ins << 1);
+                let new_board_4 = Board::from_raw(board.raw() | (ins << 1));
                 let s4 = expectimax_parallel(
                     new_board_4,
                     Node::Max,
@@ -338,7 +333,7 @@ fn evaluate_chance_parallel(
             .sum()
     } else {
         slots.iter().fold(0.0, |acc, &ins| {
-            let new_board_2 = board | ins;
+            let new_board_2 = Board::from_raw(board.raw() | ins);
             let s2 = expectimax_parallel(
                 new_board_2,
                 Node::Max,
@@ -347,7 +342,7 @@ fn evaluate_chance_parallel(
                 map,
             ) * 0.9;
 
-            let new_board_4 = board | (ins << 1);
+            let new_board_4 = Board::from_raw(board.raw() | (ins << 1));
             let s4 = expectimax_parallel(
                 new_board_4,
                 Node::Max,
@@ -370,7 +365,7 @@ fn evaluate_chance_parallel(
 // Credit to Nneonneo
 fn count_unique(board: Board) -> i32 {
     let mut bitset = 0;
-    let mut board_copy = board;
+    let mut board_copy = board.raw();
     while board_copy != 0 {
         bitset |= 1 << (board_copy & 0xf);
         board_copy >>= 4;
@@ -388,9 +383,9 @@ fn count_unique(board: Board) -> i32 {
 }
 
 fn get_heurisitic_score(board: Board) -> f64 {
-    let transpose_board = GameEngine::transpose(board);
+    let transpose_board = GameEngine::transpose(board.raw());
     (0..4).fold(0., |score, line_idx| {
-        let row_val = GameEngine::extract_line(board, line_idx);
+        let row_val = GameEngine::extract_line(board.raw(), line_idx);
         let col_val = GameEngine::extract_line(transpose_board, line_idx);
         let scores = heuristic_scores();
         let row_score = unsafe { scores.get_unchecked(row_val as usize) };
@@ -471,9 +466,9 @@ mod tests {
 
     #[test]
     fn it_count_unique() {
-        let game = 0x1134000000000000;
+        let game = Board::from_raw(0x1134000000000000);
         assert_eq!(count_unique(game), 3);
-        let game = 0x0000010000000010;
+        let game = Board::from_raw(0x0000010000000010);
         assert_eq!(count_unique(game), 1);
     }
 
@@ -484,14 +479,14 @@ mod tests {
 
         // A selection of fixed boards covering various shapes
         let boards: &[Board] = &[
-            0x0000_0000_0000_0000,
-            0x0000_0000_0000_0011,
-            0x1000_1000_0000_0000,
-            0x1121_2300_3300_4222,
-            0x1234_1332_2002_1002,
-            0x0001_0002_0003_0004,
-            0x4321_0000_0000_0000,
-            0x1111_0000_1111_0000,
+            Board::from_raw(0x0000_0000_0000_0000),
+            Board::from_raw(0x0000_0000_0000_0011),
+            Board::from_raw(0x1000_1000_0000_0000),
+            Board::from_raw(0x1121_2300_3300_4222),
+            Board::from_raw(0x1234_1332_2002_1002),
+            Board::from_raw(0x0001_0002_0003_0004),
+            Board::from_raw(0x4321_0000_0000_0000),
+            Board::from_raw(0x1111_0000_1111_0000),
         ];
 
         for &b in boards {
@@ -507,7 +502,7 @@ mod tests {
                 (Some(a), Some(b)) => std::mem::discriminant(&a) == std::mem::discriminant(&b),
                 _ => false,
             };
-            assert!(eq, "Mismatch on board {:016x}", b);
+            assert!(eq, "Mismatch on board {:016x}", b.raw());
         }
     }
 }

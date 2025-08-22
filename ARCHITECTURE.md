@@ -1,4 +1,6 @@
-**Storage**
+# 2048 benchmark
+
+## Storage
 - Goal: fast, read-heavy dataloading with simple, robust files. Favor maintainability over maximal compression; corruption of a single run should not jeopardize others.
 
 - File-per-run, binary layout (v1):

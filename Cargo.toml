@@ -5,15 +5,26 @@ authors = ["Matthew Kennedy <kennedymj97@gmail.com>"]
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+# Build as a normal Rust library by default. If you need WASM bindings,
+# enable the `wasm` feature (which brings in wasm-bindgen).
+crate-type = ["rlib"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = []
+# Enable WebAssembly bindings and JS entropy. This pulls in `wasm-bindgen`
+# and activates `getrandom/js` only when needed.
+wasm = [
+    "dep:wasm-bindgen",
+    "getrandom/js",
+]
+
 [dependencies]
 rand = "0.8"
-wasm-bindgen = "0.2"
-# Ensure RNG works on wasm32-unknown-unknown by enabling JS entropy source
-getrandom = { version = "0.2", features = ["js"] }
+wasm-bindgen = { version = "0.2", optional = true }
+# Base RNG; JS entropy only when `wasm` feature is enabled
+getrandom = { version = "0.2" }
 rayon = "1"
 dashmap = "5"
 ahash = "0.8"

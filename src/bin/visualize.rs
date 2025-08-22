@@ -20,10 +20,11 @@ fn main() -> anyhow::Result<()> {
     let steps = run.meta.steps as usize;
     let elapsed = run.meta.elapsed_s as f64;
     let mps = if elapsed > 0.0 { (steps as f64) / elapsed } else { 0.0 };
-    let final_board = *run
+    let final_board_raw = *run
         .states
         .last()
         .expect("trace should have at least one state (initial)");
+    let final_board = Board::from_raw(final_board_raw);
 
     banner();
     println!("{} {}", "File:".bold(), format!("{}", args.path.display()).cyan());
