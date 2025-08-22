@@ -52,10 +52,12 @@ This guidance keeps the engine lean, the API pleasant to use, and the docs trust
 
 ## Dependency Policy (Important)
 
-- Never modify `Cargo.toml` to add or update dependencies directly.
-- Always request the user to run `cargo add <crate> [--dev|--features ...]` and justify why it’s needed.
-- Bench/dev tooling (e.g., Criterion) must be added via `cargo add` with explicit approval.
-- Features without new dependencies may be added when needed (e.g., a bench-only feature flag), but keep changes minimal and reversible.
+- Do not edit `Cargo.toml` directly.
+- The agent must request approval and run `cargo add <crate> [--dev|--features ...]` itself, using an elevated-permissions shell command.
+  - Always include a short justification for each addition.
+  - Never ask the user to run `cargo add` themselves — the agent performs it after approval to avoid breaking flow.
+- Bench/dev tooling (e.g., Criterion) must follow the same approval flow via `cargo add`.
+- Features that do not add dependencies may be introduced when needed, but keep changes minimal and reversible.
 
 ## Cargo Usage (Quiet/Offline/Deterministic)
 
@@ -69,5 +71,5 @@ This guidance keeps the engine lean, the API pleasant to use, and the docs trust
   - Example: `cargo test -q --locked --offline`
 - Feature flags for benches/dev-only:
   - Heuristic microbench: `cargo bench --features bench-internal`
-- Adding dependencies: DO NOT edit `Cargo.toml` directly. Ask to run `cargo add` and state why.
-  - Example request: “Please run `cargo add criterion --dev` to enable microbenchmarks; we’ll use it only in `benches/`.”
+- Adding dependencies: DO NOT edit `Cargo.toml` directly. The agent must request approval and then run `cargo add` with elevated permissions, stating why.
+  - Example request the agent will execute upon approval: `cargo add criterion --dev` to enable microbenchmarks; used only in `benches/`.

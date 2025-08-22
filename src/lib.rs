@@ -73,3 +73,4 @@ pub mod expectimax;
 #[cfg(feature = "wasm")]
 pub mod wasm;
 pub mod trace;
+pub mod serialization;

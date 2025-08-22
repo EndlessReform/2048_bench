@@ -1,6 +1,7 @@
 use ai_2048::engine as GameEngine;
 use ai_2048::engine::{Board, get_score, get_highest_tile_val, Move};
-use ai_2048::trace::{self, Meta, encode_run};
+use ai_2048::trace::{self, Meta};
+use ai_2048::serialization::{self, StepV2, RunV2, write_postcard_to_path, normalize_branches};
 use clap::{Parser, Subcommand};
 use ai_2048::expectimax::ExpectimaxMultithread;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -35,6 +36,7 @@ fn main() {
     // In-memory trace buffers (zero overhead aside from simple pushes)
     let mut states: Vec<u64> = Vec::with_capacity(1024);
     let mut moves_vec: Vec<u8> = Vec::with_capacity(1024);
+    let mut steps_v2: Vec<StepV2> = Vec::with_capacity(1024);
     states.push(board.raw());
 
     // Status line: global moves/sec via indicatif
@@ -74,6 +76,10 @@ fn main() {
     // No board printing in parallel mode
 
     while !board.is_game_over() {
+        // Collect branch evaluations for v2 trace
+        let branches_raw = expectimax.branch_evals(board);
+        let branches = normalize_branches(branches_raw);
+
         let direction = expectimax.get_next_move(board);
         if direction.is_none() {
             break;
@@ -81,6 +87,8 @@ fn main() {
         move_count += 1;
         // Record move and resulting state
         let dir = direction.unwrap();
+        // Record v2 step (pre-board, chosen move, normalized branches)
+        steps_v2.push(StepV2 { pre_board: board.raw(), chosen: dir, branches: Some(branches) });
         moves_vec.push(move_to_u8(dir));
         board = board.make_move(dir, &mut rng);
         states.push(board.raw());
@@ -143,8 +151,9 @@ fn main() {
             highest_tile,
             engine_str: None,
         };
-        if let Err(e) = trace::write_run_to_path(out_path, &meta, &states, &moves_vec) {
-            eprintln!("Failed to write trace: {e}");
+        let run_v2 = RunV2 { meta, steps: steps_v2, final_board: *states.last().unwrap_or(&board.raw()) };
+        if let Err(e) = write_postcard_to_path(out_path, &run_v2) {
+            eprintln!("Failed to write v2 trace: {e}");
         }
     }
 }
@@ -211,24 +220,23 @@ fn move_to_u8(m: Move) -> u8 {
     }
 }
 
-fn run_single_game(steps: Option<u64>, stop_score: Option<u64>, stop_tile: Option<u64>) -> anyhow::Result<(Vec<u64>, Vec<u8>, f64, u64, u32, u64)> {
+fn run_single_game(steps: Option<u64>, stop_score: Option<u64>, stop_tile: Option<u64>) -> anyhow::Result<(Vec<StepV2>, u64, f64, u64, u32, u64)> {
     let start = Instant::now();
     let start_wall = trace::now_unix_seconds();
     let mut expectimax = ExpectimaxMultithread::new();
     let mut board: Board = GameEngine::insert_random_tile(Board::EMPTY);
     board = GameEngine::insert_random_tile(board);
-    let mut states: Vec<u64> = Vec::with_capacity(1024);
-    let mut moves_vec: Vec<u8> = Vec::with_capacity(1024);
-    states.push(board.raw());
+    let mut steps_v2: Vec<StepV2> = Vec::with_capacity(1024);
     let mut move_count: u64 = 0;
     while !GameEngine::is_game_over(board) {
+        let branches_raw = expectimax.branch_evals(board);
+        let branches = normalize_branches(branches_raw);
         let direction = expectimax.get_next_move(board);
         if direction.is_none() { break; }
         move_count += 1;
         let dir = direction.unwrap();
-        moves_vec.push(move_to_u8(dir));
+        steps_v2.push(StepV2 { pre_board: board.raw(), chosen: dir, branches: Some(branches) });
         board = GameEngine::make_move(board, dir);
-        states.push(board.raw());
         if let Some(limit) = steps { if move_count >= limit { break; } }
         if move_count % 100 == 0 {
             if let Some(target) = stop_score { if get_score(board) >= target { break; } }
@@ -236,17 +244,9 @@ fn run_single_game(steps: Option<u64>, stop_score: Option<u64>, stop_tile: Optio
         }
     }
     let elapsed = start.elapsed().as_secs_f64();
-    let highest_tile = states
-        .iter()
-        .map(|&b| get_highest_tile_val(Board::from_raw(b)) as u32)
-        .max()
-        .unwrap_or(0);
-    let max_score = states
-        .iter()
-        .map(|&b| get_score(Board::from_raw(b)))
-        .max()
-        .unwrap_or(0);
-    Ok((states, moves_vec, elapsed, max_score, highest_tile, start_wall))
+    let highest_tile = get_highest_tile_val(board) as u32;
+    let max_score = get_score(board);
+    Ok((steps_v2, board.raw(), elapsed, max_score, highest_tile, start_wall))
 }
 
 fn run_generator_mode(dir: &PathBuf, max_bytes: u64, quiet: bool, steps: Option<u64>, stop_score: Option<u64>, stop_tile: Option<u64>) -> anyhow::Result<()> {
@@ -267,16 +267,17 @@ fn run_generator_mode(dir: &PathBuf, max_bytes: u64, quiet: bool, steps: Option<
 
     loop {
         if bytes_written >= max_bytes { break; }
-        let (states, moves_vec, elapsed_s, max_score, highest_tile, start_wall) = run_single_game(steps, stop_score, stop_tile)?;
+        let (steps_v2, final_board, elapsed_s, max_score, highest_tile, start_wall) = run_single_game(steps, stop_score, stop_tile)?;
         let meta = Meta {
-            steps: moves_vec.len() as u32,
+            steps: steps_v2.len() as u32,
             start_unix_s: start_wall,
             elapsed_s: elapsed_s as f32,
             max_score,
             highest_tile,
             engine_str: None,
         };
-        let bytes = encode_run(&meta, &states, &moves_vec);
+        let run_v2 = RunV2 { meta, steps: steps_v2, final_board };
+        let bytes = ai_2048::serialization::to_postcard_bytes(&run_v2)?;
         let path = autoname(dir, start_wall);
         fs::create_dir_all(path.parent().unwrap())?;
         fs::write(&path, &bytes)?;
@@ -301,7 +302,7 @@ fn autoname(dir: &PathBuf, start_unix_s: u64) -> PathBuf {
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
     let subdir = dir.join(format!("d{:08}", day));
-    subdir.join(format!("run-{}-{:09}.a2run", start_unix_s, nanos))
+    subdir.join(format!("run-{}-{:09}.a2run2", start_unix_s, nanos))
 }
 
 fn directory_size_bytes(dir: &PathBuf) -> anyhow::Result<u64> {

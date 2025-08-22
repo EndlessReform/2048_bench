@@ -7,7 +7,9 @@ const MAGIC: &[u8; 4] = b"A2T1"; // ASCII magic
 const VERSION: u8 = 1;
 const ENDIAN_LE: u8 = 0; // 0 = little-endian
 
-#[derive(Debug, Clone, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Meta {
     pub steps: u32,
     pub start_unix_s: u64,
@@ -17,7 +19,7 @@ pub struct Meta {
     pub engine_str: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Run {
     pub meta: Meta,
     pub states: Vec<u64>, // length = steps + 1
@@ -246,4 +248,3 @@ mod tests {
         matches!(err, TraceError::Malformed);
     }
 }
-

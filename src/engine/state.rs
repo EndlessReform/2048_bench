@@ -2,6 +2,7 @@ use rand::Rng;
 use std::fmt;
 
 use super::ops;
+use serde::{Deserialize, Serialize};
 
 // Internal type aliases for packed representation
 pub(crate) type BoardRaw = u64;
@@ -10,7 +11,7 @@ pub(crate) type Tile = u64;
 pub(crate) type Score = u64;
 
 /// A direction to move/merge tiles.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Move {
     Up,
     Down,
