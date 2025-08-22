@@ -19,6 +19,8 @@ wasm = [
     "dep:wasm-bindgen",
     "getrandom/js",
 ]
+# Bench-only helpers that expose a tiny surface for internal measurements
+bench-internal = []
 
 [dependencies]
 rand = "0.8"
@@ -39,4 +41,5 @@ owo-colors = "4.2.2"
 walkdir = "2.5.0"
 
 [dev-dependencies]
+criterion = "0.7.0"
 tempfile = "3.21.0"

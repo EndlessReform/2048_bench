@@ -105,6 +105,29 @@ Programmatic loading:
 - Format/lints: follow standard Rust conventions; no custom toolchain required.
 - WASM: A `cdylib` is provided; see `src/wasm.rs` for the Web binding entry points.
 
+## Benchmarks (Criterion)
+
+This repo includes Criterion microbenchmarks for engine ops and the heuristic. Cargo separates tests and benches:
+- `cargo test` runs unit tests and doctests only.
+- `cargo bench` builds and runs benches only (tests are not executed). This is why “tests look ignored” when running benches; they are simply not part of the bench profile.
+
+Run benchmarks
+- Engine ops (default benches):
+  - Run: `cargo bench`
+  - Compile only: `cargo bench --no-run`
+- Heuristic bench (feature-gated to keep the public surface minimal):
+  - Run: `cargo bench --features bench-internal`
+  - Compile only: `cargo bench --features bench-internal --no-run`
+
+Quiet/locked/offline (useful for CI or predictable runs)
+- Quiet: add `-q` (e.g., `cargo bench -q`)
+- Locked deps: add `--locked` to avoid updating `Cargo.lock`
+- Offline: add `--offline` if all deps are already cached
+
+Notes
+- Benches seed RNGs (`StdRng::seed_from_u64(_)`) and warm the engine tables for determinism.
+- Parallel policy benches (if added) can be stabilized by pinning Rayon threads via `RAYON_NUM_THREADS=N`.
+
 **Performance Notes**
 - On multi-core systems, the parallel runner saturates cores and typically achieves 2–3× throughput over the single-threaded engine (exact gains depend on depth/board state).
 - The status line and periodic score/tile checks are designed to be negligible overhead (checked every 100 moves).

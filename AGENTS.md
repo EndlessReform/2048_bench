@@ -49,3 +49,25 @@ Developer checklist for public API changes:
 - If a rename/refactor is needed, provide thin wrappers and deprecate gradually.
 
 This guidance keeps the engine lean, the API pleasant to use, and the docs trustworthy without excess ceremony.
+
+## Dependency Policy (Important)
+
+- Never modify `Cargo.toml` to add or update dependencies directly.
+- Always request the user to run `cargo add <crate> [--dev|--features ...]` and justify why it’s needed.
+- Bench/dev tooling (e.g., Criterion) must be added via `cargo add` with explicit approval.
+- Features without new dependencies may be added when needed (e.g., a bench-only feature flag), but keep changes minimal and reversible.
+
+## Cargo Usage (Quiet/Offline/Deterministic)
+
+- Quiet builds/tests:
+  - Build: `cargo build -q`
+  - Test: `cargo test -q`
+  - Benches compile only: `cargo bench -q --no-run`
+- Deterministic lock usage: add `--locked` to forbid lockfile updates.
+  - Example: `cargo build -q --locked`
+- Offline mode (no network): add `--offline` (requires deps already cached/locked).
+  - Example: `cargo test -q --locked --offline`
+- Feature flags for benches/dev-only:
+  - Heuristic microbench: `cargo bench --features bench-internal`
+- Adding dependencies: DO NOT edit `Cargo.toml` directly. Ask to run `cargo add` and state why.
+  - Example request: “Please run `cargo add criterion --dev` to enable microbenchmarks; we’ll use it only in `benches/`.”

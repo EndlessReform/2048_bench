@@ -121,3 +121,10 @@ fn warm_engine_and_heuristics() {
     engine::new();
     heuristic::warm();
 }
+
+/// Bench-only: expose the raw heuristic value for a board.
+///
+/// Enabled only with the `bench-internal` feature to keep the public API small.
+#[cfg(feature = "bench-internal")]
+#[inline]
+pub fn heuristic_value(board: crate::engine::Board) -> f64 { heuristic::get_heuristic_score(board) }
