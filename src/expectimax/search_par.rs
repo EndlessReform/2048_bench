@@ -26,38 +26,43 @@ impl ExpectimaxParallel {
         Self { cfg, stats: SearchStats::default() }
     }
 
+    /// Compute the best move using parallel expectimax.
+    ///
+    /// This is a convenience wrapper around `branch_evals` that just picks the best move.
+    #[inline]
+    pub fn best_move(&mut self, board: Board) -> Option<Move> {
+        let branches = self.branch_evals(board);
+        branches
+            .iter()
+            .filter(|branch| branch.legal)
+            .max_by(|a, b| a.ev.partial_cmp(&b.ev).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|branch| branch.dir)
+    }
+
     /// Back-compat shim.
     ///
     /// Equivalent to [`Self::best_move`].
     #[inline]
     pub fn get_next_move(&mut self, board: Board) -> Option<Move> { self.best_move(board) }
 
-    /// Compute the best move using parallel expectimax.
+    /// Convenience function for parallel runner: get both best move and all branch evaluations.
     ///
-    /// Example
-    /// ```
-    /// use ai_2048::engine::{self as GameEngine, Board};
-    /// use ai_2048::expectimax::ExpectimaxParallel;
-    /// use rand::{SeedableRng, rngs::StdRng};
-    /// GameEngine::new();
-    /// let mut rng = StdRng::seed_from_u64(11);
-    /// let b = Board::EMPTY.with_random_tile(&mut rng).with_random_tile(&mut rng);
-    /// let mut ex = ExpectimaxParallel::new();
-    /// assert!(ex.best_move(b).is_some());
-    /// ```
+    /// This calls `branch_evals` once and extracts the best move from those results.
     #[inline]
-    pub fn best_move(&mut self, board: Board) -> Option<Move> {
-        let depth = self.compute_depth(board);
-        let res = self.evaluate_parallel(board, depth, 1.0);
-        // We do not currently count nodes in parallel path (original code didn't either)
-        self.stats.nodes = 0;
-        res.move_dir
+    pub fn best_move_with_branches(&mut self, board: Board) -> (Option<Move>, [BranchEval; 4]) {
+        let branches = self.branch_evals(board);
+        let best_move = branches
+            .iter()
+            .filter(|branch| branch.legal)
+            .max_by(|a, b| a.ev.partial_cmp(&b.ev).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|branch| branch.dir);
+        (best_move, branches)
     }
 
-    /// Compute EV for each direction (no normalization) in parallel.
+    /// Core function: compute EV for each direction (no normalization) in parallel.
     ///
     /// Returns a fixed array in order: `[Up, Down, Left, Right]` and marks
-    /// illegal moves as `legal=false`.
+    /// illegal moves as `legal=false`. This is the single source of truth for all evaluations.
     pub fn branch_evals(&mut self, board: Board) -> [BranchEval; 4] {
         let depth = self.compute_depth(board);
         let dirs = [Move::Up, Move::Down, Move::Left, Move::Right];
@@ -89,10 +94,12 @@ impl ExpectimaxParallel {
 
     /// EV at root (max node), equivalent to the best branch EV.
     pub fn state_value(&mut self, board: Board) -> f64 {
-        let depth = self.compute_depth(board);
-        let res = self.evaluate_parallel(board, depth, 1.0);
-        self.stats.nodes = 0;
-        res.score
+        let branches = self.branch_evals(board);
+        branches
+            .iter()
+            .filter(|branch| branch.legal)
+            .map(|branch| branch.ev)
+            .fold(f64::NEG_INFINITY, f64::max)
     }
 
     /// Statistics collected from the last call to [`best_move`],
@@ -110,20 +117,6 @@ impl ExpectimaxParallel {
         match self.cfg.depth_cap { Some(cap) => dyn_depth.min(cap), None => dyn_depth }
     }
 
-    fn evaluate_parallel(&self, board: Board, move_depth: u64, cum_prob: f32) -> ExpectimaxResult {
-        let map: DashMap<Board, TranspositionEntry, AHasher> = DashMap::with_hasher(AHasher::new());
-        let directions = [Move::Up, Move::Down, Move::Left, Move::Right];
-        let best = directions
-            .par_iter()
-            .map(|&dir| {
-                let new_board = board.shift(dir);
-                if new_board == board { return ExpectimaxResult { score: 0.0, move_dir: None }; }
-                let score = self.expectimax_parallel(new_board, Node::Chance, move_depth, cum_prob, &map);
-                ExpectimaxResult { score, move_dir: Some(dir) }
-            })
-            .reduce(|| ExpectimaxResult { score: 0.0, move_dir: None }, |a, b| if a.score >= b.score { a } else { b });
-        best
-    }
 
     fn expectimax_parallel(
         &self,
@@ -220,8 +213,5 @@ impl ExpectimaxParallel {
 
 #[derive(Clone, Copy)]
 enum Node { Max, Chance }
-
-#[derive(Debug, Clone, Copy)]
-struct ExpectimaxResult { score: f64, move_dir: Option<Move> }
 
 impl Default for ExpectimaxParallel { fn default() -> Self { Self::new() } }

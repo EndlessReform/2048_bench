@@ -1,7 +1,7 @@
 use ai_2048::engine as GameEngine;
 use ai_2048::engine::{Board, get_score, get_highest_tile_val, Move};
 use ai_2048::trace::{self, Meta};
-use ai_2048::serialization::{self, StepV2, RunV2, write_postcard_to_path, normalize_branches};
+use ai_2048::serialization::{StepV2, RunV2, write_postcard_to_path, normalize_branches};
 use clap::{Parser, Subcommand};
 use ai_2048::expectimax::ExpectimaxMultithread;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -76,17 +76,15 @@ fn main() {
     // No board printing in parallel mode
 
     while !board.is_game_over() {
-        // Collect branch evaluations for v2 trace
-        let branches_raw = expectimax.branch_evals(board);
-        let branches = normalize_branches(branches_raw);
-
-        let direction = expectimax.get_next_move(board);
+        // Get both best move and branch evaluations in a single call
+        let (direction, branches_raw) = expectimax.best_move_with_branches(board);
         if direction.is_none() {
             break;
         }
-        move_count += 1;
-        // Record move and resulting state
         let dir = direction.unwrap();
+        let branches = normalize_branches(branches_raw);
+        
+        move_count += 1;
         // Record v2 step (pre-board, chosen move, normalized branches)
         steps_v2.push(StepV2 { pre_board: board.raw(), chosen: dir, branches: Some(branches) });
         moves_vec.push(move_to_u8(dir));
@@ -229,12 +227,11 @@ fn run_single_game(steps: Option<u64>, stop_score: Option<u64>, stop_tile: Optio
     let mut steps_v2: Vec<StepV2> = Vec::with_capacity(1024);
     let mut move_count: u64 = 0;
     while !GameEngine::is_game_over(board) {
-        let branches_raw = expectimax.branch_evals(board);
-        let branches = normalize_branches(branches_raw);
-        let direction = expectimax.get_next_move(board);
+        let (direction, branches_raw) = expectimax.best_move_with_branches(board);
         if direction.is_none() { break; }
-        move_count += 1;
         let dir = direction.unwrap();
+        let branches = normalize_branches(branches_raw);
+        move_count += 1;
         steps_v2.push(StepV2 { pre_board: board.raw(), chosen: dir, branches: Some(branches) });
         board = GameEngine::make_move(board, dir);
         if let Some(limit) = steps { if move_count >= limit { break; } }

@@ -33,9 +33,14 @@ pub(crate) fn extract_line(board: BoardRaw, line_idx: u64) -> Line {
     (board >> ((3 - line_idx) * 16)) & 0xffff
 }
 
-/// Return the cell’s actual value (0 if empty), e.g., 2, 4, 8, ...
+/// Return the cell's actual value (0 if empty), e.g., 2, 4, 8, ...
 pub fn get_tile_val(board: Board, idx: usize) -> u16 {
-    2_u16.pow(((board.0 >> (60 - (4 * idx))) & 0xf) as u32)
+    let raw_val = (board.0 >> (60 - (4 * idx))) & 0xf;
+    if raw_val == 0 {
+        0
+    } else {
+        2_u16.pow(raw_val as u32)
+    }
 }
 
 pub fn line_to_vec(line: Line) -> Vec<Tile> {
@@ -321,6 +326,12 @@ mod tests {
         assert_eq!(get_tile_val(game, 3), 8);
         assert_eq!(get_tile_val(game, 10), 1024);
         assert_eq!(get_tile_val(game, 15), 32768);
+        
+        // Test empty tiles return 0
+        let empty_board = Board::from_raw(0x0000000000000000);
+        assert_eq!(get_tile_val(empty_board, 0), 0);
+        assert_eq!(get_tile_val(empty_board, 8), 0);
+        assert_eq!(get_tile_val(empty_board, 15), 0);
     }
 }
 
