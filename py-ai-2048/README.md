@@ -1,140 +1,163 @@
 # PyO3 Python Bindings for ai-2048
 
-This directory contains Python bindings for the ai-2048 Rust library, providing high-performance 2048 game simulation and AI capabilities in Python.
+High-performance Python bindings for the ai-2048 Rust library: a fast 2048 engine with an Expectimax AI and run serialization (v2, postcard).
 
-## Current Implementation Status
+## What’s Implemented
 
-**Completed:**
-- Cargo workspace setup with separate library crate (`ai-2048`) and Python bindings crate (`py-ai-2048`)
-- PyO3 dependencies and feature flags configured
-- `Board` struct with all basic methods (construction, movement, scoring, inspection)
-- `Move` enum with all directions (UP, DOWN, LEFT, RIGHT)
-- `Rng` helper class for deterministic random number generation
-- Full Python protocol support (`__str__`, `__repr__`, `__eq__`, `__hash__`, `__iter__`)
+- Board: construction, shifting, full moves with random insert, scoring, inspection.
+- Move: `UP`, `DOWN`, `LEFT`, `RIGHT` with nice repr/str and hashability.
+- Rng: deterministic RNG wrapper around Rust `StdRng` with `clone()`.
+- Expectimax (single-thread): `best_move`, `branch_evals`, `state_value`, `last_stats`, `reset_stats`.
+- Serialization (v2): `RunV2`, `StepV2`, `Meta`, `BranchV2`, file and bytes I/O, `normalize_branches_py`.
+- Python protocols: `__str__`, `__repr__`, `__eq__`, `__hash__`, `__iter__` for `Board`.
 
-## Building and Testing
+## Build & Test
 
-### Prerequisites
+- Build (dev install): `uv run maturin develop`
+- Run tests (locked): `uv run --locked pytest`
 
-- Rust toolchain (cargo)
-- Python 3.10+
-- UV package manager (recommended)
+These honor the Python environment and lockfile via `uv` and build the PyO3 extension with `maturin`.
 
-### Building the Extension
-
-**Build and install in development mode:**
-```bash
-uv run maturin develop
-```
-
-### Testing Basic Functionality
+## Quick Start
 
 ```python
-import ai_2048
-from ai_2048 import Board, Move, Rng
+from ai_2048 import Board, Move
 
-# Create empty board
-board = Board.empty()
+b = Board.empty().with_random_tile(seed=1).with_random_tile(seed=2)
+print(b)
+print("score:", b.score(), "highest:", b.highest_tile())
 
-# Add random tiles deterministically
-rng = Rng(42)
-board = board.with_random_tile(rng=rng).with_random_tile(rng=rng)
+# Pure shift (no random insert)
+b2 = b.shift(Move.LEFT)
 
-# Inspect board
-print(f"Score: {board.score()}")
-print(f"Empty cells: {board.count_empty()}")
-print(f"Highest tile: {board.highest_tile()}")
-print(f"Game over: {board.is_game_over()}")
-
-# Make moves
-left_board = board.shift(Move.LEFT)
-full_move = board.make_move(Move.LEFT, rng=rng)  # includes random tile insertion
-
-# Display board
-print(board)  # Pretty-printed grid
+# Full move (shift + random tile)
+b3 = b.make_move(Move.LEFT, seed=3)
 ```
 
-## API Reference
+## Full Game Loops
 
-### Board Class
+Deterministic loop using a persistent RNG:
 
-**Construction:**
-- `Board.empty()`  Board - Create empty board
-- `Board.from_raw(raw: int)`  Board - Create from packed representation
-- `board.raw`  int - Get packed representation
+```python
+from ai_2048 import Board, Move, Expectimax, Rng
 
-**Game Operations:**
-- `board.shift(direction: Move)`  Board - Shift without random tile
-- `board.make_move(direction: Move, rng=None, *, seed=None)`  Board - Move + random tile
-- `board.with_random_tile(rng=None, *, seed=None)`  Board - Add random tile
+rng = Rng(42)
+b = Board.empty().with_random_tile(rng=rng).with_random_tile(rng=rng)
+ai = Expectimax()
 
-**Inspection:**
-- `board.score()`  int - Current score
-- `board.is_game_over()`  bool - No legal moves remain
-- `board.highest_tile()`  int - Highest tile value
-- `board.count_empty()`  int - Empty cell count
-- `board.tile_value(index: int)`  int - Tile value at index (0-15)
-- `board.to_values()`  List[int] - All tile values
-- `board.to_exponents()`  List[int] - All tile exponents (internal representation)
+while not b.is_game_over():
+    m = ai.best_move(b)
+    if m is None:
+        break
+    b = b.make_move(m, rng=rng)
 
-### Move Enum
+print("final score:", b.score(), "highest:", b.highest_tile())
+```
 
-- `Move.UP`, `Move.DOWN`, `Move.LEFT`, `Move.RIGHT`
-- Supports equality, hashing, string representation
+Non-deterministic loop (uses thread RNG):
 
-### Rng Class
+```python
+from ai_2048 import Board, Expectimax
 
-- `Rng(seed: int)` - Deterministic random number generator
-- `rng.clone()`  Rng - Independent copy
+b = Board.empty().with_random_tile(seed=11).with_random_tile(seed=12)
+ai = Expectimax()
 
-## Next Steps / Remaining Work
+while not b.is_game_over():
+    m = ai.best_move(b)
+    if m is None:
+        break
+    b = b.make_move(m)  # thread RNG
+```
 
-### High Priority
+## Branch Evals and Normalization
 
-2. **Serialization Support (v2 format)**
-   - `RunV2`, `StepV2`, `Meta`, `BranchV2` classes
-   - File I/O methods (`load`/`save`)
-   - `RunBuilder` for ergonomic recording
+Get branch evaluations and normalize them into v2 `BranchV2` values (order: Up, Down, Left, Right):
 
-3. **Enhanced Testing**
-   - Comprehensive test suite
-   - Doctests in Python docstrings
-   - Performance benchmarks vs Rust
+```python
+from ai_2048 import Board, Expectimax, normalize_branches_py
 
-### Medium Priority
+b = Board.empty().with_random_tile(seed=1).with_random_tile(seed=2)
+ai = Expectimax()
+branches = ai.branch_evals(b)
+norm = normalize_branches_py(branches)
 
-4. **Documentation**
-   - Complete API documentation
-   - Usage examples and tutorials
-   - Migration guide from v1 format
+for br in norm:
+    print(br.is_legal, br.value)
+```
 
-5. **Distribution**
-   - Wheel building for multiple platforms
-   - PyPI publishing setup
-   - CI/CD pipeline
+## Reading and Writing Runs (v2, postcard)
 
-6. **Advanced Features**
-   - Async support for long-running operations
-   - Progress callbacks for search
-   - Custom heuristics interface
+Load a run from disk, inspect meta, iterate steps, and access the final board:
 
-## Development Notes
+```python
+from ai_2048 import RunV2
 
-- The Rust library uses a packed u64 representation for the 4x4 board (16 nibbles)
-- Random tile generation follows 2048 rules: 90% chance of 2, 10% chance of 4
-- All operations preserve Rust semantics (immutable Board, cheap copying)
-- PyO3 handles memory management and Python object conversion automatically
+run = RunV2.load("examples/example.a2run2")
+print("steps:", run.meta.steps)
+print("final highest tile:", run.final_board.highest_tile())
 
-## Architecture Decision
+# Iterate steps
+steps = run.steps
+for i, step in enumerate(steps):
+    pre = step.pre_board          # Board object
+    chosen = step.chosen          # Move
+    branches = step.branches      # Optional[List[BranchV2]]
+    if i < 3:
+        print(i, chosen, pre.score(), branches[0].is_legal if branches else None)
+```
 
-The codebase is structured as a Cargo workspace with:
-- `ai-2048/`: Core Rust library (engine, expectimax, serialization)
-- `py-ai-2048/`: Python bindings using PyO3
+Roundtrip via bytes and files:
 
-This separation allows:
-- Clean dependency management
-- Independent versioning
-- Easier testing and maintenance
-- Potential for other language bindings (e.g., WebAssembly)
+```python
+# Bytes
+data = run.to_bytes()
+run2 = RunV2.from_bytes(data)
 
-The Python API closely mirrors the Rust API design documented in `docs/pyo3_proposal.md` for consistency and familiarity.
+# Files
+run.save("/tmp/roundtrip.a2run2")
+run3 = RunV2.load("/tmp/roundtrip.a2run2")
+```
+
+## Initialize a Board from a Step
+
+`StepV2` exposes both the raw and high-level board. You can reconstruct the pre-move board and explore hypothetical outcomes:
+
+```python
+from ai_2048 import Board, Move, RunV2
+
+run = RunV2.load("examples/example.a2run2")
+step0 = run.steps[0]
+
+# Option A: use the ready-made Board
+b = step0.pre_board
+
+# Option B: construct from raw
+b_raw = Board.from_raw(step0.pre_board_raw)
+
+# Deterministic hypothetical next state from this step
+next_b = b.make_move(step0.chosen, seed=123)
+
+# Or just inspect the pure shift without randomness
+shift_only = b.shift(step0.chosen)
+```
+
+## API Reference (Brief)
+
+- Board: `empty()`, `from_raw(int)`, `raw`, `shift(Move)`, `make_move(Move, rng=None, *, seed=None)`, `with_random_tile(rng=None, *, seed=None)`, `score()`, `is_game_over()`, `highest_tile()`, `count_empty()`, `tile_value(i)`, `to_values()`, `to_exponents()`.
+- Move: `UP`, `DOWN`, `LEFT`, `RIGHT`.
+- Rng: `Rng(seed)`, `clone()`.
+- Expectimax: `best_move(Board)`, `branch_evals(Board)`, `state_value(Board)`, `last_stats()`, `reset_stats()`.
+- SearchStats: `nodes`, `peak_nodes`.
+- Serialization: `RunV2(meta, steps, final_board_raw)`, `StepV2(pre_board_raw, chosen, branches=None)`, `Meta(...)`, `BranchV2.legal(value)/illegal()`, `RunV2.load(path)`, `RunV2.save(path)`, `RunV2.to_bytes()`, `RunV2.from_bytes(data)`, `normalize_branches_py([...BranchEval...])`.
+
+Notes
+- The engine uses a packed `u64` internally; `Board` stays immutable and cheap to copy.
+- On an empty board, `highest_tile()` returns `1` (no tiles present).
+- For deterministic gameplay, reuse a single `Rng` across steps or pass `seed=`.
+
+## Project Structure
+
+- `ai-2048/`: Core Rust library (engine, expectimax, serialization v2).
+- `py-ai-2048/`: PyO3 bindings exposing the Python API.
+
+The Python surface mirrors the Rust API closely for familiarity and performance.
