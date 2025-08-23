@@ -1,0 +1,47 @@
+[package]
+name = "ai-2048"
+version = "0.1.0"
+authors = ["Matthew Kennedy <kennedymj97@gmail.com>"]
+edition = "2021"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = []
+# Bench-only helpers that expose a tiny surface for internal measurements
+bench-internal = []
+
+[dependencies]
+rand = { workspace = true }
+getrandom = { workspace = true }
+rayon = { workspace = true }
+dashmap = { workspace = true }
+ahash = { workspace = true }
+indicatif = { workspace = true }
+clap = { workspace = true }
+crc32c = { workspace = true }
+bytemuck = { workspace = true }
+memmap2 = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+owo-colors = { workspace = true }
+walkdir = { workspace = true }
+serde = { workspace = true }
+postcard = { workspace = true }
+
+[[bin]]
+name = "migrate"
+path = "src/bin/migrate.rs"
+
+[[bin]]
+name = "parallel"
+path = "src/bin/parallel.rs"
+
+[[bin]]
+name = "visualize"
+path = "src/bin/visualize.rs"
+
+[dev-dependencies]
+criterion = "0.7.0"
+tempfile = "3.21.0"
