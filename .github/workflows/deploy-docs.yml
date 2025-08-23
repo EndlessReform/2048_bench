@@ -46,9 +46,7 @@ jobs:
 
       - name: Add redirect index.html
         run: |
-          # Get the crate name from Cargo.toml
-          CRATE_NAME=$(grep -m1 '^name' Cargo.toml | sed 's/.*"\(.*\)".*/\1/' | tr '-' '_')
-          echo "<meta http-equiv=\"refresh\" content=\"0;url=./$CRATE_NAME/\">" > target/doc/index.html
+          echo "<meta http-equiv=\"refresh\" content=\"0;url=./ai_2048/\">"; > target/doc/index.html
 
       - name: Fix permissions
         run: |
