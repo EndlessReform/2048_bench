@@ -136,10 +136,18 @@ impl PyBoard {
         self.inner.tile_value(index)
     }
 
-    /// Get all tile values as a list
+    /// Get all tile values as a 4x4 2D list
     fn to_values(&self, py: Python) -> PyResult<Py<PyList>> {
-        let values: Vec<u16> = (0..16).map(|i| self.inner.tile_value(i)).collect();
-        let py_list = PyList::new_bound(py, &values);
+        let mut rows = Vec::with_capacity(4);
+        for row in 0..4 {
+            let mut row_values = Vec::with_capacity(4);
+            for col in 0..4 {
+                let index = row * 4 + col;
+                row_values.push(self.inner.tile_value(index));
+            }
+            rows.push(row_values);
+        }
+        let py_list = PyList::new_bound(py, &rows);
         Ok(py_list.into())
     }
 
