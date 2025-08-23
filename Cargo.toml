@@ -1,20 +1,8 @@
-[package]
-name = "ai-2048"
-version = "0.1.0"
-authors = ["Matthew Kennedy <kennedymj97@gmail.com>"]
-edition = "2021"
+[workspace]
+members = ["ai-2048", "py-ai-2048"]
+resolver = "2"
 
-[lib]
-crate-type = ["rlib"]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[features]
-default = []
-# Bench-only helpers that expose a tiny surface for internal measurements
-bench-internal = []
-
-[dependencies]
+[workspace.dependencies]
 rand = "0.8"
 getrandom = { version = "0.2" }
 rayon = "1"
@@ -31,19 +19,4 @@ owo-colors = "4.2.2"
 walkdir = "2.5.0"
 serde = { version = "1.0.219", features = ["derive"] }
 postcard = { version = "1.1.3", features = ["alloc"] }
-
-[[bin]]
-name = "migrate"
-path = "src/bin/migrate.rs"
-
-[[bin]]
-name = "parallel"
-path = "src/bin/parallel.rs"
-
-[[bin]]
-name = "visualize"
-path = "src/bin/visualize.rs"
-
-[dev-dependencies]
-criterion = "0.7.0"
-tempfile = "3.21.0"
+pyo3 = { version = "0.22", features = ["extension-module"] }

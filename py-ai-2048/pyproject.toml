@@ -1,0 +1,17 @@
+[build-system]
+requires = ["maturin>=1.0,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "ai-2048"
+version = "0.2.0"
+description = "Python bindings for ai-2048 Rust library"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["maturin>=1.9.3"]
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = ["pytest>=8.4.1"]

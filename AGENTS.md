@@ -73,3 +73,16 @@ This guidance keeps the engine lean, the API pleasant to use, and the docs trust
   - Heuristic microbench: `cargo bench --features bench-internal`
 - Adding dependencies: DO NOT edit `Cargo.toml` directly. The agent must request approval and then run `cargo add` with elevated permissions, stating why.
   - Example request the agent will execute upon approval: `cargo add criterion --dev` to enable microbenchmarks; used only in `benches/`.
+
+## PyO3 Workflow (Must Read)
+
+- Build (Python extension): `uv run maturin develop`
+  - Do not use Cargo to build the PyO3 extension. Use `maturin` via `uv` so the Python environment and lockfile are honored.
+- Test (Python bindings): `uv run --locked pytest`
+  - Always include `--locked` to ensure deterministic environments using `uv.lock`.
+- Permissions: The agent must request approval before running `uv`/`maturin` commands, as they may touch the Python environment or require network access.
+- Separation of concerns:
+  - Rust library and benches: use Cargo as documented above.
+  - PyO3 package under `py-ai-2048/`: use `uv` + `maturin` + `pytest` only.
+- Offline/locked preference:
+  - Prefer `--locked` and offline usage when possible; avoid resolving or modifying dependencies during routine test/build cycles.

@@ -1,0 +1,14 @@
+[package]
+name = "py-ai-2048"
+version = "0.1.0"
+authors = ["Matthew Kennedy <kennedymj97@gmail.com>"]
+edition = "2021"
+
+[lib]
+name = "ai_2048"
+crate-type = ["cdylib"]
+
+[dependencies]
+ai_2048_lib = { path = "../ai-2048", package = "ai-2048" }
+pyo3 = { workspace = true }
+rand = { workspace = true }

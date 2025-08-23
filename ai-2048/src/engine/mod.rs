@@ -5,7 +5,7 @@
 //! - Free functions mirror the methods when convenient (e.g., `shift`).
 //! - Internals (tables and hot ops) live in submodules to keep things tidy.
 
-mod state;
+pub mod state;
 mod tables;
 mod ops;
 
