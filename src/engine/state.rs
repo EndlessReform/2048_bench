@@ -204,7 +204,7 @@ impl IntoIterator for Board {
     fn into_iter(self) -> Self::IntoIter { self.tiles() }
 }
 
-impl<'a> IntoIterator for &'a Board {
+impl IntoIterator for &Board {
     type Item = u8;
     type IntoIter = TilesIter;
     #[inline]

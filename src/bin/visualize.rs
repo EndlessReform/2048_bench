@@ -84,7 +84,7 @@ fn banner() {
 }
 
 fn print_board_colored(board: Board) {
-    let horiz = format!("{}", "─".repeat(37));
+    let horiz = "─".repeat(37);
     println!("{}{}{}", "┌".bright_black(), horiz.bright_black(), "┐".bright_black());
     for r in 0..4 {
         print!("{}", "│".bright_black());

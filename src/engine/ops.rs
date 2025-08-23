@@ -182,15 +182,6 @@ fn count_non_empty(board: Board) -> u64 {
     board_copy.count_ones() as u64
 }
 
-pub(crate) fn to_vec(board: Board) -> Vec<u8> {
-    (0..16).fold(Vec::new(), |mut vec, idx| {
-        let num = extract_tile(board, idx);
-        vec.push(num as u8);
-        vec
-    })
-}
-
-fn extract_tile(board: Board, idx: usize) -> Tile { (board.0 >> ((15 - idx) * 4)) & 0xf }
 
 pub(crate) fn format_val(val: &u8) -> String {
     match val {

@@ -1,6 +1,6 @@
 use std::sync::OnceLock;
 
-use super::state::{Line, Score};
+use super::state::Score;
 
 /// Precomputed lookup tables for all possible 4-tile lines (16-bit packed).
 ///

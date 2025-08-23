@@ -42,7 +42,7 @@ fn calc_heuristic_score(line: u64) -> f64 {
     LOST_PENALTY + calc_empty(&tiles) + calc_merges(&tiles) - calc_monotonicity(&tiles) - calc_sum(&tiles)
 }
 
-fn calc_sum(line: &Vec<u64>) -> f64 {
+fn calc_sum(line: &[u64]) -> f64 {
     const SUM_POWER: f64 = 3.5;
     const SUM_WEIGHT: f64 = 11.0;
     line.iter()
@@ -50,7 +50,7 @@ fn calc_sum(line: &Vec<u64>) -> f64 {
         * SUM_WEIGHT
 }
 
-fn calc_empty(line: &Vec<u64>) -> f64 {
+fn calc_empty(line: &[u64]) -> f64 {
     const EMPTY_WEIGHT: f64 = 270.0;
     line.iter()
         .fold(0., |num_empty_tiles, &tile_val| if tile_val == 0 { num_empty_tiles + 1. } else { num_empty_tiles })
@@ -77,7 +77,7 @@ fn calc_merges(line: &Vec<u64>) -> f64 {
     merges * MERGES_WEIGHT
 }
 
-fn calc_monotonicity(line: &Vec<u64>) -> f64 {
+fn calc_monotonicity(line: &[u64]) -> f64 {
     const MONOTONICITY_POWER: f64 = 4.0;
     const MONOTONICITY_WEIGHT: f64 = 47.0;
     let mut monotonicity_left = 0.;

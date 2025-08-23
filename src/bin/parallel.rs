@@ -8,6 +8,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
+use std::path::Path;
 use std::time::{Duration, Instant};
 use std::fs;
 
@@ -291,7 +292,7 @@ fn run_generator_mode(dir: &PathBuf, max_bytes: u64, quiet: bool, steps: Option<
     Ok(())
 }
 
-fn autoname(dir: &PathBuf, start_unix_s: u64) -> PathBuf {
+fn autoname(dir: &Path, start_unix_s: u64) -> PathBuf {
     // shard by day number since epoch to keep dirs lighter
     let day = start_unix_s / 86_400;
     let nanos = std::time::SystemTime::now()

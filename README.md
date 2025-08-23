@@ -2,7 +2,7 @@
 
 The goal of this project was to produce a highly optimised engine for the game 2048. The game engine implements all the behaviour needed to play the game 2048, such as shifting and merging tiles, inserting random new tiles, and calculating the score. My MSc thesis was on using artificial intelligence methods to find strategies for the game of 2048. The aim was to find strategies which human players could understand and replicate whilst maximising performance. This required testing millions of possible strategies, making billions of moves. Therefore, having a fast game engine was an essential foundation. To stress test the engine an expectimax algorithm was used. This algorithm can perform very well on 2048, often reaching the 32,768 tile. To achieve a score so large, more than 18,000 moves and over 90 billion game states need to be considered. If the engine was not extremely well optimised this would take a very long time.
 
-The engine compiles to wasm and therefore can be ran in the browser. See it in action and read more about the project [here](https://2048-ai.mattkennedy.io/).
+This optimized 2048 engine is designed for high-performance AI testing and can handle millions of game simulations.
 
 **Local Usage**
 - **Build**: `cargo build`
@@ -17,7 +17,6 @@ Build and open the Rust API docs locally:
 - Open docs: `cargo doc --open`
 
 Notes:
-- Docs build without WASM by default. Include `--features wasm` to document the WASM bindings.
 - Doctests run with `cargo test` (examples in the docs are compiled and executed).
 
 Quick example (from the docs):
@@ -103,7 +102,6 @@ Programmatic loading:
 **Development**
 - Tests: `cargo test` (all tests should pass).
 - Format/lints: follow standard Rust conventions; no custom toolchain required.
-- WASM: A `cdylib` is provided; see `src/wasm.rs` for the Web binding entry points.
 
 ## Benchmarks (Criterion)
 

@@ -12,7 +12,7 @@ This repo aims for a small, fast 2048 engine with a clear, stable library API an
   - Use seeded RNG (`StdRng::seed_from_u64(_)`) where randomness appears for deterministic doctests.
   - Prefer method‑based examples over free functions, but mention both when relevant.
 - Crate overview lives in `src/lib.rs` (short description + quick start).
-- Features: Call out feature flags (e.g., `wasm`) in item docs when applicable.
+- Features: Call out feature flags (e.g., `bench-internal`) in item docs when applicable.
 - Doctests must pass: run `cargo test` after doc changes. Update examples when APIs change.
 
 Developer checklist for public API changes:
@@ -35,7 +35,7 @@ Developer checklist for public API changes:
 - Randomness:
   - Core methods accept `&mut impl Rng` for determinism; provide a thread‑RNG convenience separately.
 - Features:
-  - Gate optional surfaces (e.g., WASM) behind features.
+  - Gate optional surfaces behind features when needed.
 
 ## Testing
 
