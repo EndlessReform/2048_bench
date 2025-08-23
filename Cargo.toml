@@ -5,27 +5,17 @@ authors = ["Matthew Kennedy <kennedymj97@gmail.com>"]
 edition = "2021"
 
 [lib]
-# Build as a normal Rust library by default. If you need WASM bindings,
-# enable the `wasm` feature (which brings in wasm-bindgen).
 crate-type = ["rlib"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [features]
 default = []
-# Enable WebAssembly bindings and JS entropy. This pulls in `wasm-bindgen`
-# and activates `getrandom/js` only when needed.
-wasm = [
-    "dep:wasm-bindgen",
-    "getrandom/js",
-]
 # Bench-only helpers that expose a tiny surface for internal measurements
 bench-internal = []
 
 [dependencies]
 rand = "0.8"
-wasm-bindgen = { version = "0.2", optional = true }
-# Base RNG; JS entropy only when `wasm` feature is enabled
 getrandom = { version = "0.2" }
 rayon = "1"
 dashmap = "5"
