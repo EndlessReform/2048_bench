@@ -41,16 +41,14 @@ jobs:
           rm -rf ./target/doc
 
       - name: Build documentation
-        env:
-          RUSTDOCFLAGS: --enable-index-page -Zunstable-options
         run: |
-          cargo doc --all-features --no-deps --document-private-items
+          cargo doc --no-deps
 
       - name: Add redirect index.html
         run: |
-          echo '<meta http-equiv="refresh" content="0;url=./${CARGO_PKG_NAME}/">' > target/doc/index.html
-          # Replace ${CARGO_PKG_NAME} with your actual crate name if the above doesn't work
-          # For example: echo '<meta http-equiv="refresh" content="0;url=./my_crate/">' > target/doc/index.html
+          # Get the crate name from Cargo.toml
+          CRATE_NAME=$(grep -m1 '^name' Cargo.toml | sed 's/.*"\(.*\)".*/\1/' | tr '-' '_')
+          echo "<meta http-equiv=\"refresh\" content=\"0;url=./$CRATE_NAME/\">" > target/doc/index.html
 
       - name: Fix permissions
         run: |
