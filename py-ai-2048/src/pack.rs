@@ -23,11 +23,17 @@ pub struct PyPackStats {
     pub max_len: u32,
     #[pyo3(get)]
     pub mean_len: f64,
+    #[pyo3(get)]
+    pub p50: u32,
+    #[pyo3(get)]
+    pub p90: u32,
+    #[pyo3(get)]
+    pub p99: u32,
 }
 
 impl From<ser::PackStats> for PyPackStats {
     fn from(s: ser::PackStats) -> Self {
-        PyPackStats { count: s.count, total_steps: s.total_steps, min_len: s.min_len, max_len: s.max_len, mean_len: s.mean_len }
+        PyPackStats { count: s.count, total_steps: s.total_steps, min_len: s.min_len, max_len: s.max_len, mean_len: s.mean_len, p50: s.p50, p90: s.p90, p99: s.p99 }
     }
 }
 

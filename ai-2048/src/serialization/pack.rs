@@ -60,6 +60,7 @@ pub struct PackReader {
     index_len: usize, // number of entries
     data_region_start: usize,
     data_region_end: usize,
+    stats_offset: Option<usize>,
 }
 
 impl PackReader {
@@ -88,7 +89,8 @@ impl PackReader {
         let data_end = u64::from_le_bytes(bytes[footer_off..footer_off+8].try_into().unwrap()) as usize;
         let index_crc = u32::from_le_bytes(bytes[footer_off+8..footer_off+12].try_into().unwrap());
         let _data_crc = u32::from_le_bytes(bytes[footer_off+12..footer_off+16].try_into().unwrap());
-        let _stats_off = u64::from_le_bytes(bytes[footer_off+16..footer_off+24].try_into().unwrap());
+        let stats_off_u64 = u64::from_le_bytes(bytes[footer_off+16..footer_off+24].try_into().unwrap());
+        let stats_offset = if stats_off_u64 == 0 { None } else { Some(stats_off_u64 as usize) };
         let footer_crc = u32::from_le_bytes(bytes[footer_off+24..footer_off+28].try_into().unwrap());
         let calc_footer_crc = crc32c(&bytes[footer_off..footer_off+24]);
         if footer_crc != calc_footer_crc { return Err(PackError::Checksum("footer")); }
@@ -117,6 +119,7 @@ impl PackReader {
             index_len: count,
             data_region_start: min_off,
             data_region_end: max_end,
+            stats_offset,
         })
     }
 
@@ -214,7 +217,31 @@ impl PackReader {
     }
 
     pub fn stats(&self) -> Result<PackStats, PackError> {
-        // Compute lazily in a single pass (parallel) and aggregate
+        // Prefer reading cached stats block if present
+        if let Some(off) = self.stats_offset {
+            if off + 4 <= self.mmap.len() {
+                let len = u32::from_le_bytes(self.mmap[off..off+4].try_into().unwrap()) as usize;
+                let start = off + 4;
+                let end = start.saturating_add(len);
+                if end <= self.mmap.len() {
+                    let payload = &self.mmap[start..end];
+                    if let Ok(sb) = postcard::from_bytes::<StatsBlock>(payload) {
+                        return Ok(PackStats {
+                            count: sb.count,
+                            total_steps: sb.total_steps,
+                            min_len: sb.min_len,
+                            max_len: sb.max_len,
+                            mean_len: sb.mean_len,
+                            p50: sb.p50,
+                            p90: sb.p90,
+                            p99: sb.p99,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Fallback: compute lazily in a single pass (parallel) and aggregate
         let indices: Vec<usize> = (0..self.len()).collect();
         let init = PartialStats { count: 0, total_steps: 0, min_len: u32::MAX, max_len: 0 };
         let reduced = indices.par_chunks(256).map(|chunk| {
@@ -237,6 +264,9 @@ impl PackReader {
             min_len: if reduced.count == 0 { 0 } else { reduced.min_len },
             max_len: reduced.max_len,
             mean_len,
+            p50: 0,
+            p90: 0,
+            p99: 0,
         })
     }
 }
@@ -251,6 +281,21 @@ pub struct PackStats {
     pub min_len: u32,
     pub max_len: u32,
     pub mean_len: f64,
+    pub p50: u32,
+    pub p90: u32,
+    pub p99: u32,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StatsBlock {
+    count: u64,
+    total_steps: u64,
+    min_len: u32,
+    max_len: u32,
+    mean_len: f64,
+    p50: u32,
+    p90: u32,
+    p99: u32,
 }
 
 #[derive(serde::Serialize)]
@@ -454,6 +499,7 @@ mod tests {
         assert_eq!(st.min_len, 3);
         assert_eq!(st.max_len, 4);
         assert!(st.mean_len > 3.0 && st.mean_len < 4.1);
+        // quantiles may be zero for fallback compute
 
         let out = NamedTempFile::new().unwrap();
         reader.to_jsonl(out.path(), true).unwrap();

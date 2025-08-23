@@ -6,6 +6,8 @@ use ai_2048::serialization::PackReader;
 use clap::{Parser, Subcommand};
 use crc32c::crc32c;
 use walkdir::WalkDir;
+use indicatif::{ProgressBar, ProgressStyle};
+use ai_2048::serialization as ser;
 
 const MAGIC: &[u8; 8] = b"A2PACK\0\0";
 const VERSION: u32 = 1;
@@ -272,7 +274,10 @@ fn pack_dir(
         written += pad;
     }
 
-    // Data region: write entries in the same order
+    // Data region: write entries in the same order, with a progress bar
+    let pb = ProgressBar::new(entries.len() as u64);
+    pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} writing")
+        .unwrap());
     for ent in &entries {
         let needed = ent.offset as usize - written;
         if needed > 0 {
@@ -281,14 +286,60 @@ fn pack_dir(
         }
         copy_file(&ent.path, &mut out)?;
         written += ent.len as usize;
+        pb.inc(1);
     }
+    pb.finish_and_clear();
+
+    // Stats block: compute per-run step counts and summarize
+    let spb = ProgressBar::new(entries.len() as u64);
+    spb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{bar:40.magenta/blue}] {pos}/{len} analyzing")
+        .unwrap());
+    let mut steps: Vec<u32> = Vec::with_capacity(entries.len());
+    for ent in &entries {
+        let data = std::fs::read(&ent.path)?;
+        let s = if ent.kind == 2 {
+            let run: ser::RunV2 = ser::from_postcard_bytes(&data)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            run.meta.steps
+        } else {
+            let run = ai_2048::trace::parse_run_bytes(&data)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            run.meta.steps
+        };
+        steps.push(s);
+        spb.inc(1);
+    }
+    spb.finish_and_clear();
+    steps.sort_unstable();
+    let count_u64 = steps.len() as u64;
+    let total_steps: u64 = steps.iter().map(|&v| v as u64).sum();
+    let min_len = *steps.first().unwrap_or(&0);
+    let max_len = *steps.last().unwrap_or(&0);
+    let mean_len = if count_u64 == 0 { 0.0 } else { total_steps as f64 / count_u64 as f64 };
+    let idx = |q: f64| -> u32 {
+        if steps.is_empty() { 0 } else {
+            let pos = (q * ((steps.len() - 1) as f64)).round() as usize;
+            steps[pos]
+        }
+    };
+    let p50 = idx(0.5);
+    let p90 = idx(0.9);
+    let p99 = idx(0.99);
+    #[derive(serde::Serialize)]
+    struct StatsBlock { count: u64, total_steps: u64, min_len: u32, max_len: u32, mean_len: f64, p50: u32, p90: u32, p99: u32 }
+    let sb = StatsBlock { count: count_u64, total_steps, min_len, max_len, mean_len, p50, p90, p99 };
+    let sb_bytes = postcard::to_allocvec(&sb).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let stats_offset = written;
+    out.write_all(&(sb_bytes.len() as u32).to_le_bytes())?;
+    out.write_all(&sb_bytes)?;
+    written += 4 + sb_bytes.len();
 
     // Footer (fixed 32 bytes, with 4-byte pad at end)
     let index_crc = crc32c(&index_bytes);
     out.write_all(&(data_end as u64).to_le_bytes())?;
     out.write_all(&index_crc.to_le_bytes())?;
     out.write_all(&0u32.to_le_bytes())?; // data crc (optional, 0)
-    out.write_all(&0u64.to_le_bytes())?; // stats offset (0 = none)
+    out.write_all(&(stats_offset as u64).to_le_bytes())?; // stats offset
                                          // footer CRC over the previous 24 bytes
     let mut footer_tmp = Vec::with_capacity(24);
     footer_tmp.extend_from_slice(&(data_end as u64).to_le_bytes());
