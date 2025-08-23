@@ -7,6 +7,7 @@ edition = "2021"
 [lib]
 name = "ai_2048"
 crate-type = ["cdylib"]
+doc = false
 
 [dependencies]
 ai_2048_lib = { path = "../ai-2048", package = "ai-2048" }

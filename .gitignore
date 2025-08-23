@@ -2,6 +2,8 @@
 traces/
 *.a2run
 *.a2run2
+*.a2pack
+*.jsonl
 !examples/example.a2run2
 
 __pycache__/
