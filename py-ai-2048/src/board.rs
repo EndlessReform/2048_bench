@@ -2,7 +2,7 @@
 
 use pyo3::prelude::*;
 use pyo3::types::PyList;
-use ai_2048_lib::engine::Board;
+use ai_2048_lib::engine::state::{Board, TilesIter};
 use rand::{rngs::StdRng, SeedableRng};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -15,6 +15,7 @@ pub struct PyRng {
     inner: StdRng,
 }
 
+
 #[pymethods]
 impl PyRng {
     #[new]
@@ -23,7 +24,7 @@ impl PyRng {
             inner: StdRng::seed_from_u64(seed),
         }
     }
-    
+
     /// Create an independent copy of this RNG
     fn clone(&self) -> Self {
         PyRng {
@@ -39,8 +40,17 @@ pub struct PyBoard {
     inner: Board,
 }
 
+
+impl PyBoard {
+    pub(crate) fn inner(&self) -> Board {
+        self.inner
+    }
+}
+
 #[pymethods]
 impl PyBoard {
+    
+
     /// Create an empty board
     #[staticmethod]
     fn empty() -> Self {
@@ -48,7 +58,7 @@ impl PyBoard {
             inner: Board::EMPTY,
         }
     }
-    
+
     /// Create a board from its raw packed representation
     #[staticmethod]
     fn from_raw(raw: u64) -> Self {
@@ -56,20 +66,20 @@ impl PyBoard {
             inner: Board::from_raw(raw),
         }
     }
-    
+
     /// Get the raw packed representation
     #[getter]
     fn raw(&self) -> u64 {
         self.inner.raw()
     }
-    
+
     /// Shift tiles in the given direction (no random tile insertion)
     fn shift(&self, direction: PyMove) -> Self {
         PyBoard {
             inner: self.inner.shift(direction.inner),
         }
     }
-    
+
     /// Make a move and insert a random tile if the board changed
     #[pyo3(signature = (direction, rng = None, *, seed = None))]
     fn make_move(&self, direction: PyMove, mut rng: Option<&mut PyRng>, seed: Option<u64>) -> PyResult<Self> {
@@ -82,10 +92,10 @@ impl PyBoard {
             let mut thread_rng = rand::thread_rng();
             self.inner.make_move(direction.inner, &mut thread_rng)
         };
-        
+
         Ok(PyBoard { inner: new_board })
     }
-    
+
     /// Insert a random tile into an empty cell
     #[pyo3(signature = (rng = None, *, seed = None))]
     fn with_random_tile(&self, mut rng: Option<&mut PyRng>, seed: Option<u64>) -> PyResult<Self> {
@@ -97,69 +107,72 @@ impl PyBoard {
         } else {
             self.inner.with_random_tile_thread()
         };
-        
+
         Ok(PyBoard { inner: new_board })
     }
-    
+
     /// Get the current score
     fn score(&self) -> u64 {
         self.inner.score()
     }
-    
+
     /// Check if the game is over (no legal moves)
     fn is_game_over(&self) -> bool {
         self.inner.is_game_over()
     }
-    
+
     /// Get the highest tile value on the board
     fn highest_tile(&self) -> u64 {
         self.inner.highest_tile()
     }
-    
+
     /// Count empty cells
     fn count_empty(&self) -> u64 {
         self.inner.count_empty()
     }
-    
+
     /// Get the tile value at a specific index (0-15, row-major)
     fn tile_value(&self, index: usize) -> u16 {
         self.inner.tile_value(index)
     }
-    
+
     /// Get all tile values as a list
     fn to_values(&self, py: Python) -> PyResult<Py<PyList>> {
         let values: Vec<u16> = (0..16).map(|i| self.inner.tile_value(i)).collect();
-        let py_list = PyList::new_bound(py, values);
+        let py_list = PyList::new_bound(py, &values);
         Ok(py_list.into())
     }
-    
+
     /// Get all tile exponents as a list (0 for empty, 1 for 2, 2 for 4, etc.)
     fn to_exponents(&self, py: Python) -> PyResult<Py<PyList>> {
         let exponents: Vec<u8> = self.inner.to_vec();
-        let py_list = PyList::new_bound(py, exponents);
+        let py_list = PyList::new_bound(py, &exponents);
         Ok(py_list.into())
     }
-    
+
     /// String representation showing the board layout
     fn __str__(&self) -> String {
         format!("{}", self.inner)
     }
-    
+
     /// Debug representation
     fn __repr__(&self) -> String {
         format!("Board({:#018x})", self.inner.raw())
     }
-    
+
     /// Iterator over tile values (not exponents)
-    fn __iter__(&self, py: Python) -> PyResult<Py<PyList>> {
-        self.to_values(py)
+    fn __iter__(slf: PyRef<'_, Self>) -> PyResult<Py<PyBoardValueIter>> {
+        let iter = PyBoardValueIter {
+            iter: slf.inner.tiles(),
+        };
+        Py::new(slf.py(), iter)
     }
-    
+
     /// Equality comparison
     fn __eq__(&self, other: &PyBoard) -> bool {
         self.inner == other.inner
     }
-    
+
     /// Hash for use in dictionaries/sets
     fn __hash__(&self) -> u64 {
         let mut hasher = DefaultHasher::new();
@@ -167,6 +180,29 @@ impl PyBoard {
         hasher.finish()
     }
 }
+
+#[pyclass]
+struct PyBoardValueIter {
+    iter: TilesIter,
+}
+
+#[pymethods]
+impl PyBoardValueIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<u16> {
+        slf.iter.next().map(|val| {
+            if val == 0 {
+                0
+            } else {
+                1 << val
+            }
+        })
+    }
+}
+
 
 impl From<Board> for PyBoard {
     fn from(inner: Board) -> Self {
