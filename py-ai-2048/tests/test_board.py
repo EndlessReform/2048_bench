@@ -9,7 +9,7 @@ def test_board_empty():
     # The rust implementation returns 1 for the highest tile of an empty board.
     assert board.highest_tile() == 1
     assert board.count_empty() == 16
-    assert all(v == 0 for v in board.to_values())
+    assert all(v == 0 for row in board.to_values() for v in row)
 
 def test_board_from_raw():
     """Test creation from a raw u64 value."""
@@ -19,9 +19,9 @@ def test_board_from_raw():
     raw_val = 0x1000000000000002
     board = Board.from_raw(raw_val)
     assert board.raw == raw_val
-    assert board.to_values()[0] == 2
+    assert board.to_values()[0][0] == 2
     assert board.to_exponents()[0] == 1
-    assert board.to_values()[15] == 4
+    assert board.to_values()[3][3] == 4
     assert board.to_exponents()[15] == 2
     assert board.count_empty() == 14
 
@@ -72,12 +72,12 @@ def test_shift_and_make_move():
     # Shift right
     shifted_right = board.shift(Move.RIGHT)
     assert shifted_right.raw != board.raw
-    assert shifted_right.to_values()[3] == 2
+    assert shifted_right.to_values()[0][3] == 2
 
     # Shift down
     shifted_down = board.shift(Move.DOWN)
     assert shifted_down.raw != board.raw
-    assert shifted_down.to_values()[12] == 2
+    assert shifted_down.to_values()[3][0] == 2
 
     # Make move (includes adding a random tile)
     rng = Rng(42)
@@ -125,11 +125,11 @@ def test_tile_inspection():
 
     # to_values
     values = board.to_values()
-    assert values[0] == 16
-    assert values[1] == 8
-    assert values[2] == 4
-    assert values[3] == 2
-    assert values[4] == 0
+    assert values[0][0] == 16
+    assert values[0][1] == 8
+    assert values[0][2] == 4
+    assert values[0][3] == 2
+    assert values[1][0] == 0
 
     # to_exponents
     exponents = board.to_exponents()
