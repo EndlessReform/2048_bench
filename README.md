@@ -126,6 +126,14 @@ let run = pack.decode_auto_v2(0)?; // v1 auto-upgraded to v2
 pack.to_jsonl("runs.jsonl", true)?; // fast JSONL export (parallel)
 ```
 
+Additional CLI commands:
+
+- Validate: `cargo run -q -p ai-2048 --bin a2pack -- validate --packfile dataset.a2pack`
+- Stats: `cargo run -q -p ai-2048 --bin a2pack -- stats --packfile dataset.a2pack`
+- To JSONL: `cargo run -q -p ai-2048 --bin a2pack -- to-jsonl --packfile dataset.a2pack --output runs.jsonl --parallel`
+- Extract runs: `cargo run -q -p ai-2048 --bin a2pack -- extract --packfile dataset.a2pack --indices 0,5,42 --output out/`
+- Inspect run: `cargo run -q -p ai-2048 --bin a2pack -- inspect --packfile dataset.a2pack --index 123`
+
 
 **Development**
 - Tests: `cargo test` (all tests should pass).
