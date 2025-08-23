@@ -345,7 +345,7 @@ fn pack_dir(
     footer_tmp.extend_from_slice(&(data_end as u64).to_le_bytes());
     footer_tmp.extend_from_slice(&index_crc.to_le_bytes());
     footer_tmp.extend_from_slice(&0u32.to_le_bytes());
-    footer_tmp.extend_from_slice(&0u64.to_le_bytes());
+    footer_tmp.extend_from_slice(&(stats_offset as u64).to_le_bytes());
     let footer_crc = crc32c(&footer_tmp);
     out.write_all(&footer_crc.to_le_bytes())?;
     out.write_all(&0u32.to_le_bytes())?; // pad to 32 bytes

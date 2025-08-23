@@ -308,7 +308,7 @@ struct RunJson<'a> {
     highest_tile: u32,
     final_board: u64,
     states: &'a [u64],
-    moves: &'a [u8],
+    moves: &'a [&'static str],
 }
 
 fn write_run_jsonl_line(buf: &mut Vec<u8>, run_idx: u64, run: &RunV2) -> Result<(), serde_json::Error> {
@@ -319,7 +319,12 @@ fn write_run_jsonl_line(buf: &mut Vec<u8>, run_idx: u64, run: &RunV2) -> Result<
     states.push(run.final_board);
     let mut moves = Vec::with_capacity(run.steps.len());
     for s in &run.steps {
-        let dir = match s.chosen { crate::engine::Move::Up => 0u8, crate::engine::Move::Down => 1, crate::engine::Move::Left => 2, crate::engine::Move::Right => 3 };
+        let dir = match s.chosen {
+            crate::engine::Move::Up => "UP",
+            crate::engine::Move::Down => "DOWN",
+            crate::engine::Move::Left => "LEFT",
+            crate::engine::Move::Right => "RIGHT",
+        };
         moves.push(dir);
     }
 
