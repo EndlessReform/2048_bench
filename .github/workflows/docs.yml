@@ -2,9 +2,19 @@ name: Build and Deploy Docs
 
 on:
   push:
-    branches:
-      - master
+    branches: [master]
   workflow_dispatch: {}
+
+# Required for Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Prevent overlapping deploys
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -12,21 +22,29 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
+
+      # Recommended: configures Pages and sets up the correct base/path
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
       - name: Build documentation
         run: cargo doc --no-deps
+
       - name: Upload docs artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: target/doc
+          path: target/doc # produces artifact named "github-pages"
 
   deploy:
-    runs-on: ubuntu-latest
     needs: build
-    permissions:
-      pages: write
-      id-token: write
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Deploy to GitHub Pages
-        uses: actions/deploy-pages@v1
+        id: deployment
+        uses: actions/deploy-pages@v4
