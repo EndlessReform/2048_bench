@@ -114,8 +114,8 @@ impl Expectimax {
         res.score
     }
 
-    /// Statistics collected from the last call to [`best_move`],
-    /// [`branch_evals`] or [`state_value`].
+    /// Statistics collected from the last call to [`Self::best_move`],
+    /// [`Self::branch_evals`] or [`Self::state_value`].
     #[inline]
     pub fn last_stats(&self) -> SearchStats { self.stats }
 
