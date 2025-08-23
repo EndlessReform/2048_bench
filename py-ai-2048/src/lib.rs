@@ -9,11 +9,13 @@ mod board;
 mod move_enum;
 mod expectimax;
 mod serialization;
+mod pack;
 
 pub use board::{PyBoard, PyRng};
 pub use move_enum::PyMove;
 pub use expectimax::{PyExpectimax, PyExpectimaxConfig, PySearchStats};
 pub use serialization::{PyRunV2, PyStepV2, PyBranchV2, PyMeta, normalize_branches_py};
+pub use pack::{PyPackReader, PyPackStats};
 
 /// Initialize the ai-2048 Python module
 #[pymodule]
@@ -35,6 +37,13 @@ fn ai_2048(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyBranchV2>()?;
     m.add_class::<PyMeta>()?;
     m.add_function(wrap_pyfunction!(normalize_branches_py, m)?)?;
+
+    // Packfile bindings
+    m.add_class::<PyPackReader>()?;
+    m.add_class::<PyPackStats>()?;
+    // Iterators (internal types)
+    m.add_class::<pack::PyPackIter>()?;
+    m.add_class::<pack::PyPackBatchesIter>()?;
 
     Ok(())
 }

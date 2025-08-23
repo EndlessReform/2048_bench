@@ -6,6 +6,7 @@
 //! structures (with `branches: None`).
 
 mod v2;
+mod pack;
 
 pub use v2::{
     BranchV2,
@@ -20,3 +21,9 @@ pub use v2::{
     read_postcard_from_path,
 };
 
+pub use pack::{
+    PackReader,
+    PackError,
+    RunKind,
+    PackStats,
+};

@@ -1,7 +1,7 @@
 //! PyO3 bindings for run serialization (v2, postcard)
 
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyList, PyBytes};
 use std::path::PathBuf;
 
 use ai_2048_lib::engine::state::Board as RsBoard;
@@ -147,7 +147,10 @@ impl PyRunV2 {
     #[getter]
     fn final_board(&self) -> PyBoard { RsBoard::from_raw(self.inner.final_board).into() }
 
-    fn to_bytes(&self) -> PyResult<Vec<u8>> { ser::to_postcard_bytes(&self.inner).map_err(map_ser_err) }
+    fn to_bytes(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+        let v = ser::to_postcard_bytes(&self.inner).map_err(map_ser_err)?;
+        Ok(PyBytes::new_bound(py, &v).unbind())
+    }
     #[staticmethod]
     fn from_bytes(data: &[u8]) -> PyResult<Self> { Ok(PyRunV2 { inner: ser::from_postcard_bytes(data).map_err(map_ser_err)? }) }
 
@@ -155,6 +158,10 @@ impl PyRunV2 {
     #[staticmethod]
     fn load(path: PathBuf) -> PyResult<Self> { Ok(PyRunV2 { inner: ser::read_postcard_from_path(path).map_err(map_ser_err)? }) }
 }
+
+// Conversions for ergonomic bridging from Rust library to PyO3 wrapper
+impl From<ser::RunV2> for PyRunV2 { fn from(inner: ser::RunV2) -> Self { Self { inner } } }
+impl From<PyRunV2> for ser::RunV2 { fn from(p: PyRunV2) -> Self { p.inner } }
 
 #[pyfunction]
 pub fn normalize_branches_py(evals: Vec<PyBranchEval>) -> PyResult<Vec<PyBranchV2>> {

@@ -99,6 +99,54 @@ Programmatic loading:
   - `write_run_to_path(path, &meta, &states, &moves)` writes a single run.
   - The format is versioned; `engine_str` is optional (e.g., for git SHA) and does not affect compatibility.
 
+### Packfile (a2pack)
+
+When working with tens of thousands of small `.a2run2` files, filesystem overhead can dominate. Use the `a2pack` binary to pack many runs into a single indexed file for fast sequential scans and O(1) random access via the library API.
+
+Pack a directory recursively:
+
+```
+cargo run -q -p ai-2048 --bin a2pack -- pack --input /path/to/runs --output dataset.a2pack
+```
+
+Options:
+- `--input DIR`: directory to scan recursively for `*.a2run2` files.
+- `--output FILE`: output `.a2pack` file path.
+- `--align BYTES` (default `4096`): alignment for index/data and entries.
+- `--entry-crc` (default `true`): store per-entry CRC32C for payload verification.
+
+Reading a packfile from Rust:
+
+```
+use ai_2048::serialization::PackReader;
+
+let pack = PackReader::open("dataset.a2pack")?;
+println!("runs: {}", pack.len());
+let run = pack.decode_auto_v2(0)?; // v1 auto-upgraded to v2
+pack.to_jsonl("runs.jsonl", true)?; // fast JSONL export (parallel)
+```
+
+Reading a packfile from Python (PyO3):
+
+```
+import ai_2048 as a2
+
+r = a2.PackReader.open("dataset.a2pack")
+print(r.stats.count, r.stats.mean_len)
+run0 = r.decode(0)                # -> RunV2 (v1 auto-upgraded)
+batch = r.decode_batch([0, 5, 42])
+r.to_jsonl("runs.jsonl", parallel=True)
+```
+
+Additional CLI commands:
+
+- Validate: `cargo run -q -p ai-2048 --bin a2pack -- validate --packfile dataset.a2pack`
+- Stats: `cargo run -q -p ai-2048 --bin a2pack -- stats --packfile dataset.a2pack`
+- To JSONL: `cargo run -q -p ai-2048 --bin a2pack -- to-jsonl --packfile dataset.a2pack --output runs.jsonl --parallel`
+- Extract runs: `cargo run -q -p ai-2048 --bin a2pack -- extract --packfile dataset.a2pack --indices 0,5,42 --output out/`
+- Inspect run: `cargo run -q -p ai-2048 --bin a2pack -- inspect --packfile dataset.a2pack --index 123`
+
+
 **Development**
 - Tests: `cargo test` (all tests should pass).
 - Format/lints: follow standard Rust conventions; no custom toolchain required.
