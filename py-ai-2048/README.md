@@ -9,6 +9,7 @@ High-performance Python bindings for the ai-2048 Rust library: a fast 2048 engin
 - Rng: deterministic RNG wrapper around Rust `StdRng` with `clone()`.
 - Expectimax (single-thread): `best_move`, `branch_evals`, `state_value`, `last_stats`, `reset_stats`.
 - Serialization (v2): `RunV2`, `StepV2`, `Meta`, `BranchV2`, file and bytes I/O, `normalize_branches_py`.
+- Packfile reader: `PackReader` for fast, low-overhead access to packed `.a2run2` datasets. Includes random access, batched decode, iterators, JSONL export, and summary stats.
 - Python protocols: `__str__`, `__repr__`, `__eq__`, `__hash__`, `__iter__` for `Board`.
 
 ## Build & Test
@@ -116,6 +117,50 @@ run2 = RunV2.from_bytes(data)
 # Files
 run.save("/tmp/roundtrip.a2run2")
 run3 = RunV2.load("/tmp/roundtrip.a2run2")
+
+## Reading Packed Datasets (PackReader)
+
+The `PackReader` API provides high-throughput access to many `.a2run2` runs stored in a single indexed `.a2pack` file. Build packs with the Rust CLI (`a2pack`) from the repository root (see the top-level README).
+
+Open a packfile and inspect:
+
+```python
+import ai_2048 as a2
+
+r = a2.PackReader.open("/path/to/dataset.a2pack")
+print("runs:", len(r))
+print("stats:", r.stats.count, r.stats.mean_len)
+
+# Random access
+a_run = r.decode(0)              # -> RunV2 (v1 upgraded automatically)
+print(a_run.meta.steps)
+
+# Batched random access (parallel decode)
+batch = r.decode_batch([0, 5, 42])
+print([x.meta.steps for x in batch])
+
+# Iteration
+y = 0
+for run in r.iter():             # sequential; decodes off-thread
+    y += run.meta.steps
+
+# Specific-order iteration
+for run in r.iter_indices([2, 0, 1]):
+    print(run.meta.steps)
+
+# Batches for dataloaders
+for batch in r.iter_batches(batch_size=256, shuffle=True, seed=123):
+    # batch is a list[RunV2]; deterministic order with seed
+    pass
+
+# Bulk JSONL export (fast Rust path)
+r.to_jsonl("/tmp/runs.jsonl", parallel=True)
+```
+
+Notes
+- All heavy decode/export runs in Rust; methods release the GIL for throughput.
+- Random access returns `RunV2`; legacy v1 runs are converted transparently.
+- `iter_batches(shuffle=True, seed=...)` provides deterministic shuffles for training.
 ```
 
 ## Initialize a Board from a Step

@@ -189,23 +189,26 @@ impl PackReader {
         let mut f = File::create(out)?;
         let indices: Vec<usize> = (0..self.len()).collect();
         if parallel {
-            let chunks = indices.par_chunks(256).map(|chunk| {
-                let mut buf = String::with_capacity(256 * 256);
-                for &i in chunk {
-                    let run = self.decode_auto_v2(i)?;
-                    write_run_jsonl_line(&mut buf, i as u64, &run).map_err(|_| PackError::Malformed("fmt"))?;
-                }
-                Ok::<String, PackError>(buf)
-            }).collect::<Result<Vec<_>, _>>()?;
-            for s in chunks { f.write_all(s.as_bytes())?; }
+            let chunks = indices
+                .par_chunks(256)
+                .map(|chunk| {
+                    let mut buf: Vec<u8> = Vec::with_capacity(256 * 256);
+                    for &i in chunk {
+                        let run = self.decode_auto_v2(i)?;
+                        write_run_jsonl_line(&mut buf, i as u64, &run).map_err(|e| PackError::Decode(e.to_string()))?;
+                    }
+                    Ok::<Vec<u8>, PackError>(buf)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            for s in chunks { f.write_all(&s)?; }
         } else {
-            let mut buf = String::with_capacity(256 * 256);
+            let mut buf: Vec<u8> = Vec::with_capacity(256 * 256);
             for i in indices {
                 let run = self.decode_auto_v2(i)?;
-                write_run_jsonl_line(&mut buf, i as u64, &run).map_err(|_| PackError::Malformed("fmt"))?;
-                if buf.len() > 1_000_000 { f.write_all(buf.as_bytes())?; buf.clear(); }
+                write_run_jsonl_line(&mut buf, i as u64, &run).map_err(|e| PackError::Decode(e.to_string()))?;
+                if buf.len() > 1_000_000 { f.write_all(&buf)?; buf.clear(); }
             }
-            if !buf.is_empty() { f.write_all(buf.as_bytes())?; }
+            if !buf.is_empty() { f.write_all(&buf)?; }
         }
         Ok(())
     }
@@ -250,31 +253,44 @@ pub struct PackStats {
     pub mean_len: f64,
 }
 
-fn write_run_jsonl_line(buf: &mut String, run_idx: u64, run: &RunV2) -> std::fmt::Result {
-    // Minimal numeric-only JSON to avoid dependency on serde_json.
-    // Shape: {"run_idx":X,"steps":N,"start_unix_s":...,"elapsed_s":...,"max_score":...,"highest_tile":...,"final_board":Y,"states":[...],"moves":[...]}
-    use std::fmt::Write as _;
-    let m = &run.meta;
-    write!(buf, "{{\"run_idx\":{},\"steps\":{},\"start_unix_s\":{},\"elapsed_s\":{},\"max_score\":{},\"highest_tile\":{},\"final_board\":{}",
-        run_idx, m.steps, m.start_unix_s, m.elapsed_s, m.max_score, m.highest_tile, run.final_board)?;
-    // States and moves reconstructed from v2 steps
-    buf.push_str(",\"states\":[");
-    for (i, s) in run.steps.iter().enumerate() {
-        if i > 0 { buf.push(','); }
-        write!(buf, "{}", s.pre_board)?;
-    }
-    // append final board as last state
-    if !run.steps.is_empty() { buf.push(','); }
-    write!(buf, "{}", run.final_board)?;
-    buf.push(']');
+#[derive(serde::Serialize)]
+struct RunJson<'a> {
+    run_idx: u64,
+    steps: u32,
+    start_unix_s: u64,
+    elapsed_s: f32,
+    max_score: u64,
+    highest_tile: u32,
+    final_board: u64,
+    states: &'a [u64],
+    moves: &'a [u8],
+}
 
-    buf.push_str(",\"moves\":[");
-    for (i, s) in run.steps.iter().enumerate() {
-        if i > 0 { buf.push(','); }
+fn write_run_jsonl_line(buf: &mut Vec<u8>, run_idx: u64, run: &RunV2) -> Result<(), serde_json::Error> {
+    let m = &run.meta;
+    // reconstruct states and moves
+    let mut states = Vec::with_capacity(run.steps.len() + 1);
+    for s in &run.steps { states.push(s.pre_board); }
+    states.push(run.final_board);
+    let mut moves = Vec::with_capacity(run.steps.len());
+    for s in &run.steps {
         let dir = match s.chosen { crate::engine::Move::Up => 0u8, crate::engine::Move::Down => 1, crate::engine::Move::Left => 2, crate::engine::Move::Right => 3 };
-        write!(buf, "{}", dir)?;
+        moves.push(dir);
     }
-    buf.push_str("]}\n");
+
+    let rec = RunJson {
+        run_idx,
+        steps: m.steps,
+        start_unix_s: m.start_unix_s,
+        elapsed_s: m.elapsed_s,
+        max_score: m.max_score,
+        highest_tile: m.highest_tile,
+        final_board: run.final_board,
+        states: &states,
+        moves: &moves,
+    };
+    serde_json::to_writer(&mut *buf, &rec)?;
+    buf.push(b'\n');
     Ok(())
 }
 

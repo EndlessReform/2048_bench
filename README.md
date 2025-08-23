@@ -126,6 +126,18 @@ let run = pack.decode_auto_v2(0)?; // v1 auto-upgraded to v2
 pack.to_jsonl("runs.jsonl", true)?; // fast JSONL export (parallel)
 ```
 
+Reading a packfile from Python (PyO3):
+
+```
+import ai_2048 as a2
+
+r = a2.PackReader.open("dataset.a2pack")
+print(r.stats.count, r.stats.mean_len)
+run0 = r.decode(0)                # -> RunV2 (v1 auto-upgraded)
+batch = r.decode_batch([0, 5, 42])
+r.to_jsonl("runs.jsonl", parallel=True)
+```
+
 Additional CLI commands:
 
 - Validate: `cargo run -q -p ai-2048 --bin a2pack -- validate --packfile dataset.a2pack`
