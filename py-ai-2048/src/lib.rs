@@ -8,10 +8,12 @@ use pyo3::prelude::*;
 mod board;
 mod move_enum;
 mod expectimax;
+mod serialization;
 
 pub use board::{PyBoard, PyRng};
 pub use move_enum::PyMove;
 pub use expectimax::{PyExpectimax, PyExpectimaxConfig, PySearchStats};
+pub use serialization::{PyRunV2, PyStepV2, PyBranchV2, PyMeta, normalize_branches_py};
 
 /// Initialize the ai-2048 Python module
 #[pymodule]
@@ -27,6 +29,12 @@ fn ai_2048(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyExpectimaxConfig>()?;
     m.add_class::<PySearchStats>()?;
     m.add_class::<expectimax::PyBranchEval>()?;
-    
+    // Serialization (v2)
+    m.add_class::<PyRunV2>()?;
+    m.add_class::<PyStepV2>()?;
+    m.add_class::<PyBranchV2>()?;
+    m.add_class::<PyMeta>()?;
+    m.add_function(wrap_pyfunction!(normalize_branches_py, m)?)?;
+
     Ok(())
 }

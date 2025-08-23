@@ -91,12 +91,6 @@ print(board)  # Pretty-printed grid
 
 ### High Priority
 
-1. **Expectimax AI Bindings**
-   - `Expectimax` class with `best_move()`, `branch_evals()`, `state_value()`
-   - `ExpectimaxParallel` or parallel constructor method
-   - `ExpectimaxConfig` and `SearchStats` classes
-   - GIL release for long-running searches
-
 2. **Serialization Support (v2 format)**
    - `RunV2`, `StepV2`, `Meta`, `BranchV2` classes
    - File I/O methods (`load`/`save`)

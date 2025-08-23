@@ -73,6 +73,12 @@ impl From<RsBranchEval> for PyBranchEval {
     }
 }
 
+impl PyBranchEval {
+    pub(crate) fn to_raw(&self) -> RsBranchEval {
+        RsBranchEval { dir: self.direction.into(), ev: self.expected_value, legal: self.is_legal }
+    }
+}
+
 #[pyclass(name = "Expectimax")]
 pub struct PyExpectimax {
     inner: Expectimax,

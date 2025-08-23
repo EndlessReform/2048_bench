@@ -2,6 +2,7 @@
 traces/
 *.a2run
 *.a2run2
+!examples/example.a2run2
 
 __pycache__/
 *.py[cod]
