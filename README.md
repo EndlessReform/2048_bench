@@ -99,6 +99,34 @@ Programmatic loading:
   - `write_run_to_path(path, &meta, &states, &moves)` writes a single run.
   - The format is versioned; `engine_str` is optional (e.g., for git SHA) and does not affect compatibility.
 
+### Packfile (a2pack)
+
+When working with tens of thousands of small `.a2run2` files, filesystem overhead can dominate. Use the `a2pack` binary to pack many runs into a single indexed file for fast sequential scans and O(1) random access via the library API.
+
+Pack a directory recursively:
+
+```
+cargo run -q -p ai-2048 --bin a2pack -- pack --input /path/to/runs --output dataset.a2pack
+```
+
+Options:
+- `--input DIR`: directory to scan recursively for `*.a2run2` files.
+- `--output FILE`: output `.a2pack` file path.
+- `--align BYTES` (default `4096`): alignment for index/data and entries.
+- `--entry-crc` (default `true`): store per-entry CRC32C for payload verification.
+
+Reading a packfile from Rust:
+
+```
+use ai_2048::serialization::PackReader;
+
+let pack = PackReader::open("dataset.a2pack")?;
+println!("runs: {}", pack.len());
+let run = pack.decode_auto_v2(0)?; // v1 auto-upgraded to v2
+pack.to_jsonl("runs.jsonl", true)?; // fast JSONL export (parallel)
+```
+
+
 **Development**
 - Tests: `cargo test` (all tests should pass).
 - Format/lints: follow standard Rust conventions; no custom toolchain required.
