@@ -2,3 +2,8 @@
 traces/
 *.a2run
 *.a2run2
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.dist-info/

@@ -184,7 +184,7 @@ impl From<BoardRaw> for Board { fn from(v: BoardRaw) -> Self { Board::from_raw(v
 impl From<Board> for BoardRaw { fn from(b: Board) -> Self { b.into_raw() } }
 
 /// Iterator over board tiles (exponents) in row-major order.
-pub struct TilesIter { raw: BoardRaw, idx: usize }
+pub struct TilesIter { pub raw: BoardRaw, pub idx: usize }
 
 impl Iterator for TilesIter {
     type Item = u8;
