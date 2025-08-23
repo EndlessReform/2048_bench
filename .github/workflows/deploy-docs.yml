@@ -41,6 +41,9 @@ jobs:
         run: |
           echo "<meta http-equiv=\"refresh\" content=\"0;url=./ai_2048/\">"; > target/doc/index.html
 
+      - name: Disable Jekyll
+        run: touch target/doc/.nojekyll
+
       - name: Fix permissions
         run: |
           chmod -c -R +rX "target/doc" | while read line; do
