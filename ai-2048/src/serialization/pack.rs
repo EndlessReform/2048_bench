@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{self, Write};
+use std::io::{self, Read, Write};
 use std::path::Path;
 
 use crc32c::crc32c;

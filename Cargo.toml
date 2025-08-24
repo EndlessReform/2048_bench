@@ -15,7 +15,7 @@ bytemuck = "1.23.2"
 memmap2 = "0.9.7"
 thiserror = "2.0.16"
 anyhow = "1.0.99"
-owo-colors = "4.2.2"
+owo-colors = { version = "4.2.2", features = ["supports-colors"] }
 walkdir = "2.5.0"
 serde = { version = "1.0.219", features = ["derive"] }
 postcard = { version = "1.1.3", features = ["alloc"] }
