@@ -163,6 +163,22 @@ Notes
 - `iter_batches(shuffle=True, seed=...)` provides deterministic shuffles for training.
 ```
 
+### Step-level batches for ML
+
+For training that consumes individual decision steps, use step-level batching. Each batch yields a tuple `(pre_boards, chosen_dirs, branch_evs)`:
+
+```
+for (pre_boards, chosen_dirs, branch_evs) in r.iter_step_batches(batch_size=1024, shuffle=True, seed=123):
+    # pre_boards: List[List[int]] with 16 exponents (0 empty, 1->2, 2->4, ...), row-major c1r1..c4r4
+    # chosen_dirs: List[int] with 0:Up, 1:Down, 2:Left, 3:Right
+    # branch_evs: List[List[BranchV2]] ordered [Up, Down, Left, Right]; chosen entry clamped to exactly 1.0 when maximal
+    pass
+```
+
+Notes:
+- The iterator flattens all (run, step) pairs across the pack; `shuffle=True` with a `seed` makes order deterministic.
+- When branch EVs are absent on a step (legacy traces), `branch_evs` is synthesized as `[Illegal, Illegal, Illegal, Legal(1.0 at chosen)]`.
+
 ## Initialize a Board from a Step
 
 `StepV2` exposes both the raw and high-level board. You can reconstruct the pre-move board and explore hypothetical outcomes:

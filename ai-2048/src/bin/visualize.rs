@@ -2,8 +2,11 @@ use ai_2048::engine as GameEngine;
 use ai_2048::engine::{get_tile_val, Board, Move};
 use ai_2048::{trace, serialization};
 use clap::Parser;
+use std::fs::File;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use owo_colors::{OwoColorize, colors::*};
+use serde::Serialize;
 
 #[derive(Debug, Parser)]
 #[command(name = "visualize", about = "Visualize a 2048 run trace (.a2run or .a2run2)")]
@@ -13,6 +16,12 @@ struct Args {
     /// Optional step index to display (0..=highest). Defaults to highest.
     #[arg(long, short = 's')]
     step: Option<usize>,
+    /// Output the selected board and metadata as JSON
+    #[arg(long)]
+    json: bool,
+    /// When used with --json, write to this file instead of stdout
+    #[arg(long, short = 'o')]
+    out: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -20,7 +29,7 @@ fn main() -> anyhow::Result<()> {
     GameEngine::new();
     // Dispatch by extension; default to v1 if unknown
     let ext = args.path.extension().and_then(|s| s.to_str()).unwrap_or("");
-    let (steps, elapsed, mps, max_score, highest_tile, board_to_show, chosen_step, clamped, next_move) =
+    let (steps, elapsed, mps, max_score, highest_tile, board_to_show, chosen_step, clamped, next_move, branches_opt) =
         if ext == "a2run2" {
             let run = serialization::read_postcard_from_path(&args.path)?;
             let steps = run.meta.steps as usize;
@@ -41,6 +50,11 @@ fn main() -> anyhow::Result<()> {
             let next_move = if chosen_step < steps {
                 run.steps.get(chosen_step).map(|s| s.chosen)
             } else { None };
+            let branches_opt = if chosen_step < steps {
+                run.steps
+                    .get(chosen_step)
+                    .and_then(|s| s.branches)
+            } else { None };
             (
                 steps,
                 elapsed,
@@ -51,6 +65,7 @@ fn main() -> anyhow::Result<()> {
                 chosen_step,
                 clamped,
                 next_move,
+                branches_opt,
             )
         } else {
             let run = trace::parse_run_file(&args.path)?;
@@ -89,38 +104,115 @@ fn main() -> anyhow::Result<()> {
                 chosen_step,
                 clamped,
                 next_move,
+                None,
             )
         };
 
-    println!("{} {}", "File:".bold(), format!("{}", args.path.display()).cyan());
-    // We don't show start time for v2/v1 split here; omit to keep concise
-    println!("{} {:.3}", "Elapsed (s):".bold(), elapsed);
-    println!("{} {}", "Steps:".bold(), steps.to_string().magenta());
-    println!("{} {:.1}", "Moves/sec:".bold(), mps);
-    println!("{} {}", "Max score:".bold(), max_score.to_string().green());
-    println!("{} {}", "Highest tile:".bold(), highest_tile.to_string().bright_yellow());
+    if args.json {
+        // Build 4x4 values array (actual tile values)
+        let mut board_values: Vec<Vec<u16>> = Vec::with_capacity(4);
+        for r in 0..4 {
+            let mut row = Vec::with_capacity(4);
+            for c in 0..4 {
+                row.push(board_to_show.tile_value(r * 4 + c));
+            }
+            board_values.push(row);
+        }
 
-    if clamped {
-        println!(
-            "{} {} (max is {})",
-            "Note:".bold().bright_yellow(),
-            format!("requested step {} is out of range; showing highest", args.step.unwrap()),
-            steps
-        );
-    }
+        #[derive(Serialize)]
+        struct VizJson<'a> {
+            file: &'a str,
+            elapsed_s: f64,
+            steps: usize,
+            moves_per_sec: f64,
+            max_score: u64,
+            highest_tile: u64,
+            chosen_step: usize,
+            clamped: bool,
+            next_move: Option<&'a str>,
+            branches: Option<BranchesOut>,
+            board: Vec<Vec<u16>>,
+        }
 
-    let title = if chosen_step == steps {
-        format!("Final Board (step {})", chosen_step)
+        #[derive(Serialize)]
+        struct BranchesOut {
+            up: Option<f32>,
+            down: Option<f32>,
+            left: Option<f32>,
+            right: Option<f32>,
+        }
+
+        let next_move_name = next_move.map(|m| match m {
+            Move::Up => "Up",
+            Move::Down => "Down",
+            Move::Left => "Left",
+            Move::Right => "Right",
+        });
+        let branches_json = branches_opt.map(|arr| {
+            use ai_2048::serialization::BranchV2;
+            let to_opt = |b: BranchV2| match b { BranchV2::Legal(v) => Some(v), BranchV2::Illegal => None };
+            BranchesOut {
+                up: to_opt(arr[0]),
+                down: to_opt(arr[1]),
+                left: to_opt(arr[2]),
+                right: to_opt(arr[3]),
+            }
+        });
+
+        let payload = VizJson {
+            file: &format!("{}", args.path.display()),
+            elapsed_s: elapsed,
+            steps,
+            moves_per_sec: mps,
+            max_score,
+            highest_tile: highest_tile as u64,
+            chosen_step,
+            clamped,
+            next_move: next_move_name,
+            branches: branches_json,
+            board: board_values,
+        };
+
+        // Write to file if requested, else stdout
+        if let Some(out_path) = args.out.as_ref() {
+            let mut f = File::create(out_path)?;
+            serde_json::to_writer(&mut f, &payload)?;
+            f.write_all(b"\n")?; // newline for CLI friendliness
+        } else {
+            serde_json::to_writer(io::stdout().lock(), &payload)?;
+            eprintln!(""); // ensure newline when stdout is piped; use stderr to avoid JSON pollution
+        }
     } else {
-        format!("Board at step {}", chosen_step)
-    };
-    println!("\n{}\n", title.bold().bright_white());
-    print_board_colored(board_to_show);
+        println!("{} {}", "File:".bold(), format!("{}", args.path.display()).cyan());
+        // We don't show start time for v2/v1 split here; omit to keep concise
+        println!("{} {:.3}", "Elapsed (s):".bold(), elapsed);
+        println!("{} {}", "Steps:".bold(), steps.to_string().magenta());
+        println!("{} {:.1}", "Moves/sec:".bold(), mps);
+        println!("{} {}", "Max score:".bold(), max_score.to_string().green());
+        println!("{} {}", "Highest tile:".bold(), highest_tile.to_string().bright_yellow());
 
-    // If we're not at the final board, show the agent's move taken from this board
-    if let Some(mv) = next_move {
-        let (name, arrow) = pretty_move(mv);
-        println!("{} {} {}", "Next move:".bold().bright_cyan(), name.bright_white().bold(), arrow.bright_white());
+        if clamped {
+            println!(
+                "{} {} (max is {})",
+                "Note:".bold().bright_yellow(),
+                format!("requested step {} is out of range; showing highest", args.step.unwrap()),
+                steps
+            );
+        }
+
+        let title = if chosen_step == steps {
+            format!("Final Board (step {})", chosen_step)
+        } else {
+            format!("Board at step {}", chosen_step)
+        };
+        println!("\n{}\n", title.bold().bright_white());
+        print_board_colored(board_to_show);
+
+        // If we're not at the final board, show the agent's move taken from this board
+        if let Some(mv) = next_move {
+            let (name, arrow) = pretty_move(mv);
+            println!("{} {} {}", "Next move:".bold().bright_cyan(), name.bright_white().bold(), arrow.bright_white());
+        }
     }
 
     Ok(())
