@@ -66,6 +66,9 @@ enum Command {
         /// Export one line per step (flattened). Default: one line per run.
         #[arg(long, default_value_t = false)]
         by_step: bool,
+        /// Disable progress bar
+        #[arg(long, default_value_t = false)]
+        no_progress: bool,
     },
     /// Extract specific runs by index
     Extract {
@@ -132,9 +135,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("max_len: {}", s.max_len);
             println!("mean_len: {:.3}", s.mean_len);
         }
-        Command::ToJsonl { packfile, output, parallel, by_step } => {
+        Command::ToJsonl { packfile, output, parallel, by_step, no_progress } => {
             let r = PackReader::open(&packfile)?;
-            r.to_jsonl(&output, parallel, by_step)?;
+            r.to_jsonl(&output, parallel, by_step, !no_progress)?;
             eprintln!("Wrote {} JSONL to {}", if by_step {"per-step"} else {"per-run"}, output.display());
         }
         Command::Extract { packfile, indices, output } => {

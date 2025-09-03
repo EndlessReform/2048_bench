@@ -193,12 +193,12 @@ impl PyPackReader {
         Ok(out)
     }
 
-    #[pyo3(signature = (path, parallel=None, by_step=None))]
-    pub fn to_jsonl(&self, py: Python<'_>, path: PathBuf, parallel: Option<bool>, by_step: Option<bool>) -> PyResult<()> {
+    #[pyo3(signature = (path, parallel=None, by_step=None, progress=None))]
+    pub fn to_jsonl(&self, py: Python<'_>, path: PathBuf, parallel: Option<bool>, by_step: Option<bool>, progress: Option<bool>) -> PyResult<()> {
         let inner = self.inner.clone();
         py.allow_threads(move || {
             inner
-                .to_jsonl(path, parallel.unwrap_or(true), by_step.unwrap_or(false))
+                .to_jsonl(path, parallel.unwrap_or(true), by_step.unwrap_or(false), progress.unwrap_or(true))
                 .map_err(map_pack_err)
         })
     }

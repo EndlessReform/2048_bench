@@ -251,25 +251,53 @@ impl PackReader {
 
     /// Export the packfile to a JSONL file.
     /// If `by_step` is false, writes one line per run; if true, writes one line per step (flattened).
-    pub fn to_jsonl<P: AsRef<Path>>(&self, out: P, parallel: bool, by_step: bool) -> Result<(), PackError> {
+    pub fn to_jsonl<P: AsRef<Path>>(&self, out: P, parallel: bool, by_step: bool, progress: bool) -> Result<(), PackError> {
         let mut f = File::create(out)?;
         let indices: Vec<usize> = (0..self.len()).collect();
+        // Progress bar setup
+        let pb = if progress {
+            if by_step {
+                // Try to get total steps cheaply; if unavailable, fall back to spinner
+                match self.stats() {
+                    Ok(s) if s.total_steps > 0 => {
+                        let pb = indicatif::ProgressBar::new(s.total_steps);
+                        pb.set_style(indicatif::ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} steps {elapsed} {eta}").unwrap());
+                        Some(pb)
+                    }
+                    _ => {
+                        let pb = indicatif::ProgressBar::new_spinner();
+                        pb.set_style(indicatif::ProgressStyle::with_template("{spinner} {elapsed} steps: {pos}").unwrap());
+                        pb.enable_steady_tick(std::time::Duration::from_millis(120));
+                        Some(pb)
+                    }
+                }
+            } else {
+                let pb = indicatif::ProgressBar::new(indices.len() as u64);
+                pb.set_style(indicatif::ProgressStyle::with_template("{bar:40.cyan/blue} {pos}/{len} runs {elapsed} {eta}").unwrap());
+                Some(pb)
+            }
+        } else { None };
+
         if parallel {
             let chunks = indices
                 .par_chunks(256)
                 .map(|chunk| {
                     let mut buf: Vec<u8> = Vec::with_capacity(256 * 256);
+                    // Clone progress bar handle for thread-safe increments
+                    let lp = pb.as_ref().map(|p| p.clone());
                     for &i in chunk {
                         if by_step {
                             let slice = self.get_slice(i)?;
                             let run = self.decode_auto_v2(i)?;
                             let run_uuid = compute_run_uuid(i as u64, slice);
-                            write_step_jsonl_lines(&mut buf, i as u64, &run_uuid, &run)
+                            let wrote_steps = write_step_jsonl_lines(&mut buf, i as u64, &run_uuid, &run)
                                 .map_err(|e| PackError::Decode(e.to_string()))?;
+                            if let Some(p) = &lp { p.inc(wrote_steps as u64); }
                         } else {
                             let run = self.decode_auto_v2(i)?;
                             write_run_jsonl_line(&mut buf, i as u64, &run)
                                 .map_err(|e| PackError::Decode(e.to_string()))?;
+                            if let Some(p) = &lp { p.inc(1); }
                         }
                     }
                     Ok::<Vec<u8>, PackError>(buf)
@@ -285,12 +313,14 @@ impl PackReader {
                     let slice = self.get_slice(i)?;
                     let run = self.decode_auto_v2(i)?;
                     let run_uuid = compute_run_uuid(i as u64, slice);
-                    write_step_jsonl_lines(&mut buf, i as u64, &run_uuid, &run)
+                    let wrote_steps = write_step_jsonl_lines(&mut buf, i as u64, &run_uuid, &run)
                         .map_err(|e| PackError::Decode(e.to_string()))?;
+                    if let Some(p) = &pb { p.inc(wrote_steps as u64); }
                 } else {
                     let run = self.decode_auto_v2(i)?;
                     write_run_jsonl_line(&mut buf, i as u64, &run)
                         .map_err(|e| PackError::Decode(e.to_string()))?;
+                    if let Some(p) = &pb { p.inc(1); }
                 }
                 if buf.len() > 1_000_000 {
                     f.write_all(&buf)?;
@@ -301,6 +331,7 @@ impl PackReader {
                 f.write_all(&buf)?;
             }
         }
+        if let Some(pb) = pb { pb.finish_and_clear(); }
         Ok(())
     }
 
@@ -489,13 +520,13 @@ fn compute_run_uuid(run_idx: u64, slice: &[u8]) -> String {
     format!("a2r-{:08x}-{:08x}", crc, run_idx as u32)
 }
 
+// Returns number of steps written
 fn write_step_jsonl_lines(
     buf: &mut Vec<u8>,
     run_idx: u64,
     run_uuid: &str,
     run: &RunV2,
-) -> Result<(), serde_json::Error> {
-    let m = &run.meta;
+) -> Result<usize, serde_json::Error> {
     for (si, s) in run.steps.iter().enumerate() {
         let chosen = match s.chosen {
             crate::engine::Move::Up => "UP",
@@ -531,7 +562,7 @@ fn write_step_jsonl_lines(
         serde_json::to_writer(&mut *buf, &rec)?;
         buf.push(b'\n');
     }
-    Ok(())
+    Ok(run.steps.len())
 }
 
 #[cfg(test)]
