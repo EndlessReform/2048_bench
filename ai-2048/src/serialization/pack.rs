@@ -8,6 +8,7 @@ use rayon::prelude::*;
 
 use crate::serialization::{self as ser, RunV2};
 use crate::trace;
+use crate::engine::state::Board as RsBoard;
 
 const MAGIC: &[u8; 8] = b"A2PACK\0\0";
 const VERSION: u32 = 1;
@@ -475,11 +476,8 @@ struct StepJson<'a> {
     run_idx: u64,
     run_uuid: &'a str,
     step_idx: u32,
-    // optional run context for convenience
-    steps: u32,
-    start_unix_s: u64,
-    // step payload
-    pre_board: u64,
+    // step payload: 16 exponents (0 empty, 1->2, 2->4, ...)
+    pre_board: [u8; 16],
     chosen: &'static str,
     branches: [BranchJson; 4], // Up, Down, Left, Right
 }
@@ -505,25 +503,28 @@ fn write_step_jsonl_lines(
             crate::engine::Move::Left => "LEFT",
             crate::engine::Move::Right => "RIGHT",
         };
-        let branches_arr = if let Some(arr) = s.branches {
-            arr
-        } else {
+        let chosen_idx = match s.chosen { crate::engine::Move::Up => 0, crate::engine::Move::Down => 1, crate::engine::Move::Left => 2, crate::engine::Move::Right => 3 };
+        let mut branches_arr = if let Some(arr) = s.branches { arr } else {
             let mut tmp = [crate::serialization::BranchV2::Illegal; 4];
-            let idx = match s.chosen { crate::engine::Move::Up => 0, crate::engine::Move::Down => 1, crate::engine::Move::Left => 2, crate::engine::Move::Right => 3 };
-            tmp[idx] = crate::serialization::BranchV2::Legal(1.0);
+            tmp[chosen_idx] = crate::serialization::BranchV2::Legal(1.0);
             tmp
         };
+        // Clamp chosen branch to exactly 1.0 if it is near 1.0
+        if let crate::serialization::BranchV2::Legal(v) = branches_arr[chosen_idx] {
+            if v > 1.0 - 1e-6 { branches_arr[chosen_idx] = crate::serialization::BranchV2::Legal(1.0); }
+        }
         let branches = branches_arr.map(|b| match b {
             crate::serialization::BranchV2::Illegal => BranchJson { legal: false, value: 0.0 },
             crate::serialization::BranchV2::Legal(v) => BranchJson { legal: true, value: v },
         });
+        // Convert packed u64 board to 16 exponents in row-major order
+        let exps_vec = RsBoard::from_raw(s.pre_board).to_vec();
+        let exps: [u8; 16] = exps_vec.try_into().unwrap();
         let rec = StepJson {
             run_idx,
             run_uuid,
             step_idx: si as u32,
-            steps: m.steps,
-            start_unix_s: m.start_unix_s,
-            pre_board: s.pre_board,
+            pre_board: exps,
             chosen,
             branches,
         };

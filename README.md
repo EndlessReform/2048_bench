@@ -126,7 +126,7 @@ let run = pack.decode_auto_v2(0)?; // v1 auto-upgraded to v2
 // fast JSONL export (parallel)
 // Per-run (one JSON object per run)
 pack.to_jsonl("runs.jsonl", true, false)?;
-// Per-step (one JSON object per step; includes run_uuid and step_idx)
+// Per-step (one JSON object per step; includes run_uuid, step_idx, and pre_board as 16 exponents)
 pack.to_jsonl("steps.jsonl", true, true)?;
 ```
 
@@ -141,7 +141,7 @@ run0 = r.decode(0)                # -> RunV2 (v1 auto-upgraded)
 batch = r.decode_batch([0, 5, 42])
 # Per-run JSONL
 r.to_jsonl("runs.jsonl", parallel=True)
-# Per-step JSONL (flattened)
+# Per-step JSONL (flattened; pre_board is 16 exponents)
 r.to_jsonl("steps.jsonl", parallel=True, by_step=True)
 ```
 
