@@ -166,7 +166,7 @@ Notes
 
 For training that consumes individual decision steps, use step-level batching. Each batch yields a tuple `(pre_boards, chosen_dirs, branch_evs)`:
 
-```
+```python
 for (pre_boards, chosen_dirs, branch_evs) in r.iter_step_batches(batch_size=1024, shuffle=True, seed=123):
     # pre_boards: List[List[int]] with 16 exponents (0 empty, 1->2, 2->4, ...), row-major c1r1..c4r4
     # chosen_dirs: List[int] with 0:Up, 1:Down, 2:Left, 3:Right
@@ -177,6 +177,7 @@ for (pre_boards, chosen_dirs, branch_evs) in r.iter_step_batches(batch_size=1024
 Notes:
 - The iterator flattens all (run, step) pairs across the pack; `shuffle=True` with a `seed` makes order deterministic.
 - When branch EVs are absent on a step (legacy traces), `branch_evs` is synthesized as `[Illegal, Illegal, Illegal, Legal(1.0 at chosen)]`.
+- Performance: with `shuffle=False`, step batches stream run-by-run without an upfront scan; with `shuffle=True`, the iterator first computes all (run, step) pairs to shuffle deterministically, which may add a brief startup cost on very large packs (deterministic and paid once per iterator).
 
 ### Train/Test Splits for DataLoaders
 

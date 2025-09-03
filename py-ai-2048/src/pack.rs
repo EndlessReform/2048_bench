@@ -271,29 +271,57 @@ impl PyPackReader {
         shuffle: Option<bool>,
         seed: Option<u64>,
     ) -> PyResult<Py<PyStepBatchesIter>> {
-        // Materialize all (run_idx, step_idx) pairs
-        let mut pairs: Vec<(usize, usize)> = Vec::new();
-        for i in 0..self.inner.len() {
-            let steps = {
-                let inner = self.inner.clone();
-                let run = py.allow_threads(move || inner.decode_auto_v2(i).map_err(map_pack_err))?;
-                run.meta.steps as usize
-            };
-            for si in 0..steps { pairs.push((i, si)); }
-        }
         if shuffle.unwrap_or(false) {
+            // Shuffled: materialize all (run_idx, step_idx) pairs (decodes each run once for step count)
+            let mut pairs: Vec<(usize, usize)> = Vec::new();
+            for i in 0..self.inner.len() {
+                let steps = {
+                    let inner = self.inner.clone();
+                    let run = py.allow_threads(move || inner.decode_auto_v2(i).map_err(map_pack_err))?;
+                    run.meta.steps as usize
+                };
+                for si in 0..steps { pairs.push((i, si)); }
+            }
             let mut rng = StdRng::seed_from_u64(seed.unwrap_or(0));
             pairs.as_mut_slice().shuffle(&mut rng);
+            Py::new(
+                py,
+                PyStepBatchesIter {
+                    reader: self.inner.clone(),
+                    pairs,
+                    pos: 0,
+                    batch_size,
+                    run_cache: std::collections::HashMap::with_capacity(16),
+                    lru: std::collections::VecDeque::with_capacity(16),
+                    cache_cap: 16,
+                    streaming: false,
+                    runs_stream: Vec::new(),
+                    run_pos_stream: 0,
+                    step_pos_stream: 0,
+                    current_run_stream: None,
+                },
+            )
+        } else {
+            // Non-shuffled: stream runs sequentially; avoid upfront decodes
+            let runs: Vec<usize> = (0..self.inner.len()).collect();
+            Py::new(
+                py,
+                PyStepBatchesIter {
+                    reader: self.inner.clone(),
+                    pairs: Vec::new(),
+                    pos: 0,
+                    batch_size,
+                    run_cache: std::collections::HashMap::with_capacity(16),
+                    lru: std::collections::VecDeque::with_capacity(16),
+                    cache_cap: 16,
+                    streaming: true,
+                    runs_stream: runs,
+                    run_pos_stream: 0,
+                    step_pos_stream: 0,
+                    current_run_stream: None,
+                },
+            )
         }
-        Py::new(
-            py,
-            PyStepBatchesIter {
-                reader: self.inner.clone(),
-                pairs,
-                pos: 0,
-                batch_size,
-            },
-        )
     }
 }
 
@@ -374,9 +402,19 @@ impl PyPackBatchesIter {
 #[pyclass(module = "ai_2048", name = "_StepBatchesIter")]
 pub struct PyStepBatchesIter {
     reader: Arc<ser::PackReader>,
-    pairs: Vec<(usize, usize)>, // (run_idx, step_idx)
+    pairs: Vec<(usize, usize)>, // (run_idx, step_idx) when shuffled mode
     pos: usize,
     batch_size: usize,
+    // Small decoded-run cache to avoid re-decoding the same run across batches
+    run_cache: std::collections::HashMap<usize, Arc<ser::RunV2>>, // run_idx -> run
+    lru: std::collections::VecDeque<usize>, // FIFO eviction for simplicity
+    cache_cap: usize,
+    // Streaming (non-shuffled) mode state
+    streaming: bool,
+    runs_stream: Vec<usize>,
+    run_pos_stream: usize,
+    step_pos_stream: usize,
+    current_run_stream: Option<Arc<ser::RunV2>>,
 }
 
 #[pymethods]
@@ -388,60 +426,45 @@ impl PyStepBatchesIter {
     /// - chosen_dirs: List[int] with 0..3 for Up,Down,Left,Right
     /// - branch_evs: List[List[BranchV2]] with 4 entries [Up, Down, Left, Right]
     fn __next__(&mut self, py: Python<'_>) -> Option<(Py<PyAny>, Py<PyAny>, Py<PyAny>)> {
+        if self.streaming {
+            return self.next_streaming(py);
+        }
         if self.pos >= self.pairs.len() { return None; }
         let start = self.pos;
         let end = (self.pos + self.batch_size).min(self.pairs.len());
         self.pos = end;
-        let slice: &[(usize, usize)] = &self.pairs[start..end];
 
-        // Group by run index to avoid decoding the same run multiple times
-        use std::collections::BTreeMap;
-        let mut by_run: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-        for &(ri, si) in slice { by_run.entry(ri).or_default().push(si); }
+        let count = end - start;
+        let mut pre_boards: Vec<Vec<u8>> = Vec::with_capacity(count);
+        let mut chosen_dirs: Vec<u8> = Vec::with_capacity(count);
+        let mut branches_vec: Vec<[ser::BranchV2; 4]> = Vec::with_capacity(count);
 
-        let mut pre_boards: Vec<Vec<u8>> = Vec::with_capacity(slice.len());
-        let mut chosen_dirs: Vec<u8> = Vec::with_capacity(slice.len());
-        let mut branches_vec: Vec<[ser::BranchV2; 4]> = Vec::with_capacity(slice.len());
-
-        // We must preserve the order of pairs in `slice`, so collect outputs into a temp map
-        let mut out_map: BTreeMap<(usize, usize), (Vec<u8>, u8, [ser::BranchV2; 4])> = BTreeMap::new();
-
-        for (run_idx, step_idxs) in by_run.into_iter() {
-            let reader = self.reader.clone();
-            // Decode run without holding the GIL
-            let run = match py.allow_threads(move || reader.decode_auto_v2(run_idx).map_err(map_pack_err)) {
-                Ok(r) => r,
-                Err(_) => return None,
+        for i in start..end {
+            let (ri, si) = self.pairs[i];
+            // Fetch from small cache or decode
+            let run = match self.fetch_run(py, ri) {
+                Some(r) => r,
+                None => return None,
             };
-            for &si in &step_idxs {
-                if si >= run.steps.len() { return None; }
-                let st = &run.steps[si];
-                let exps: Vec<u8> = RsBoard::from_raw(st.pre_board).to_vec();
-                let dir_idx: u8 = match st.chosen { RsMove::Up => 0, RsMove::Down => 1, RsMove::Left => 2, RsMove::Right => 3 };
+            if si >= run.steps.len() { return None; }
+            let st = &run.steps[si];
+            let exps: Vec<u8> = RsBoard::from_raw(st.pre_board).to_vec();
+            let dir_idx: u8 = match st.chosen { RsMove::Up => 0, RsMove::Down => 1, RsMove::Left => 2, RsMove::Right => 3 };
 
-                // Build branch EVs; if absent, mark chosen as Legal(1.0) and others Illegal.
-                let mut branches = if let Some(arr) = st.branches { arr } else {
-                    let mut tmp = [ser::BranchV2::Illegal; 4];
-                    tmp[dir_idx as usize] = ser::BranchV2::Legal(1.0);
-                    tmp
-                };
-                // Clamp chosen branch to exactly 1.0 if it is near 1.
-                if let ser::BranchV2::Legal(v) = branches[dir_idx as usize] {
-                    if v > 1.0 - 1e-6 { branches[dir_idx as usize] = ser::BranchV2::Legal(1.0); }
-                }
-
-                out_map.insert((run_idx, si), (exps, dir_idx, branches));
+            // Build branch EVs; if absent, mark chosen as Legal(1.0) and others Illegal.
+            let mut branches = if let Some(arr) = st.branches { arr } else {
+                let mut tmp = [ser::BranchV2::Illegal; 4];
+                tmp[dir_idx as usize] = ser::BranchV2::Legal(1.0);
+                tmp
+            };
+            // Clamp chosen branch to exactly 1.0 if it is near 1.
+            if let ser::BranchV2::Legal(v) = branches[dir_idx as usize] {
+                if v > 1.0 - 1e-6 { branches[dir_idx as usize] = ser::BranchV2::Legal(1.0); }
             }
-        }
 
-        for &(ri, si) in slice {
-            if let Some((exps, d, branches)) = out_map.remove(&(ri, si)) {
-                pre_boards.push(exps);
-                chosen_dirs.push(d);
-                branches_vec.push(branches);
-            } else {
-                return None;
-            }
+            pre_boards.push(exps);
+            chosen_dirs.push(dir_idx);
+            branches_vec.push(branches);
         }
 
         let py_pre = pyo3::types::PyList::new_bound(py, &pre_boards).unbind().into_any();
@@ -455,6 +478,62 @@ impl PyStepBatchesIter {
                     Ok(obj) => { let _ = inner.append(obj); },
                     Err(_) => return None,
                 }
+            }
+            let _ = outer.append(inner);
+        }
+        Some((py_pre, py_dirs, outer.unbind().into_any()))
+    }
+
+    fn next_streaming(&mut self, py: Python<'_>) -> Option<(Py<PyAny>, Py<PyAny>, Py<PyAny>)> {
+        if self.run_pos_stream >= self.runs_stream.len() { return None; }
+        let mut produced = 0usize;
+        let mut pre_boards: Vec<Vec<u8>> = Vec::with_capacity(self.batch_size);
+        let mut chosen_dirs: Vec<u8> = Vec::with_capacity(self.batch_size);
+        let mut branches_vec: Vec<[ser::BranchV2; 4]> = Vec::with_capacity(self.batch_size);
+
+        while produced < self.batch_size {
+            if self.run_pos_stream >= self.runs_stream.len() { break; }
+            // Ensure current run is loaded
+            if self.current_run_stream.is_none() {
+                let ri = self.runs_stream[self.run_pos_stream];
+                self.current_run_stream = self.fetch_run(py, ri);
+                if self.current_run_stream.is_none() { return None; }
+                self.step_pos_stream = 0;
+            }
+            let run = self.current_run_stream.as_ref().unwrap().clone();
+            let total_steps = run.steps.len();
+            while produced < self.batch_size && self.step_pos_stream < total_steps {
+                let st = &run.steps[self.step_pos_stream];
+                let exps: Vec<u8> = RsBoard::from_raw(st.pre_board).to_vec();
+                let dir_idx: u8 = match st.chosen { RsMove::Up => 0, RsMove::Down => 1, RsMove::Left => 2, RsMove::Right => 3 };
+                let mut branches = if let Some(arr) = st.branches { arr } else {
+                    let mut tmp = [ser::BranchV2::Illegal; 4];
+                    tmp[dir_idx as usize] = ser::BranchV2::Legal(1.0);
+                    tmp
+                };
+                if let ser::BranchV2::Legal(v) = branches[dir_idx as usize] {
+                    if v > 1.0 - 1e-6 { branches[dir_idx as usize] = ser::BranchV2::Legal(1.0); }
+                }
+                pre_boards.push(exps);
+                chosen_dirs.push(dir_idx);
+                branches_vec.push(branches);
+                self.step_pos_stream += 1;
+                produced += 1;
+            }
+            if self.step_pos_stream >= total_steps {
+                self.run_pos_stream += 1;
+                self.current_run_stream = None;
+            }
+        }
+        if produced == 0 { return None; }
+
+        let py_pre = pyo3::types::PyList::new_bound(py, &pre_boards).unbind().into_any();
+        let py_dirs = pyo3::types::PyList::new_bound(py, &chosen_dirs).unbind().into_any();
+        let outer = pyo3::types::PyList::empty_bound(py);
+        for arr in branches_vec.into_iter() {
+            let inner = pyo3::types::PyList::empty_bound(py);
+            for b in arr {
+                match Py::new(py, PyBranchV2::from(b)) { Ok(obj) => { let _ = inner.append(obj); }, Err(_) => return None }
             }
             let _ = outer.append(inner);
         }
@@ -497,26 +576,53 @@ impl PyPackView {
         shuffle: Option<bool>,
         seed: Option<u64>,
     ) -> PyResult<Py<PyStepBatchesIter>> {
-        // Materialize (run_idx, step_idx) pairs for only the selected runs
-        let mut pairs: Vec<(usize, usize)> = Vec::new();
-        for &ri in &self.runs {
-            let reader = self.reader.clone();
-            let steps = py.allow_threads(move || reader.decode_auto_v2(ri).map_err(map_pack_err))?.meta.steps as usize;
-            for si in 0..steps { pairs.push((ri, si)); }
-        }
         if shuffle.unwrap_or(false) {
+            // Shuffled: materialize (run_idx, step_idx) pairs for selected runs
+            let mut pairs: Vec<(usize, usize)> = Vec::new();
+            for &ri in &self.runs {
+                let reader = self.reader.clone();
+                let steps = py.allow_threads(move || reader.decode_auto_v2(ri).map_err(map_pack_err))?.meta.steps as usize;
+                for si in 0..steps { pairs.push((ri, si)); }
+            }
             let mut rng = StdRng::seed_from_u64(seed.unwrap_or(0));
             pairs.as_mut_slice().shuffle(&mut rng);
+            Py::new(
+                py,
+                PyStepBatchesIter {
+                    reader: self.reader.clone(),
+                    pairs,
+                    pos: 0,
+                    batch_size,
+                    run_cache: std::collections::HashMap::with_capacity(16),
+                    lru: std::collections::VecDeque::with_capacity(16),
+                    cache_cap: 16,
+                    streaming: false,
+                    runs_stream: Vec::new(),
+                    run_pos_stream: 0,
+                    step_pos_stream: 0,
+                    current_run_stream: None,
+                },
+            )
+        } else {
+            // Non-shuffled: stream within selected runs without upfront decode
+            Py::new(
+                py,
+                PyStepBatchesIter {
+                    reader: self.reader.clone(),
+                    pairs: Vec::new(),
+                    pos: 0,
+                    batch_size,
+                    run_cache: std::collections::HashMap::with_capacity(16),
+                    lru: std::collections::VecDeque::with_capacity(16),
+                    cache_cap: 16,
+                    streaming: true,
+                    runs_stream: self.runs.clone(),
+                    run_pos_stream: 0,
+                    step_pos_stream: 0,
+                    current_run_stream: None,
+                },
+            )
         }
-        Py::new(
-            py,
-            PyStepBatchesIter {
-                reader: self.reader.clone(),
-                pairs,
-                pos: 0,
-                batch_size,
-            },
-        )
     }
 
     /// Iterate run-level batches restricted to this view.
@@ -549,4 +655,26 @@ impl PyPackView {
 
     /// Return the run indices backing this view.
     pub fn indices(&self) -> Vec<usize> { self.runs.clone() }
+}
+
+impl PyStepBatchesIter {
+    #[inline]
+    fn fetch_run(&mut self, py: Python<'_>, idx: usize) -> Option<Arc<ser::RunV2>> {
+        if let Some(r) = self.run_cache.get(&idx) {
+            return Some(r.clone());
+        }
+        let reader = self.reader.clone();
+        let run = match py.allow_threads(move || reader.decode_auto_v2(idx).map_err(map_pack_err)) {
+            Ok(r) => Arc::new(r),
+            Err(_) => return None,
+        };
+        if self.run_cache.len() >= self.cache_cap {
+            if let Some(old) = self.lru.pop_front() {
+                self.run_cache.remove(&old);
+            }
+        }
+        self.lru.push_back(idx);
+        self.run_cache.insert(idx, run.clone());
+        Some(run)
+    }
 }
