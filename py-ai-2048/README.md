@@ -161,7 +161,6 @@ Notes
 - All heavy decode/export runs in Rust; methods release the GIL for throughput.
 - Random access returns `RunV2`; legacy v1 runs are converted transparently.
 - `iter_batches(shuffle=True, seed=...)` provides deterministic shuffles for training.
-```
 
 ### Step-level batches for ML
 
@@ -178,6 +177,44 @@ for (pre_boards, chosen_dirs, branch_evs) in r.iter_step_batches(batch_size=1024
 Notes:
 - The iterator flattens all (run, step) pairs across the pack; `shuffle=True` with a `seed` makes order deterministic.
 - When branch EVs are absent on a step (legacy traces), `branch_evs` is synthesized as `[Illegal, Illegal, Illegal, Legal(1.0 at chosen)]`.
+
+### Train/Test Splits for DataLoaders
+
+Create deterministic train/test views directly from a packfile and feed them into separate PyTorch DataLoaders. Splits can target a percentage or an absolute size, and can be based on runs (default, no leakage) or steps (targets step counts; may overshoot to whole runs).
+
+```python
+import ai_2048 as a2
+
+r = a2.PackReader.open("/path/to/dataset.a2pack")
+
+# Example A: 10% test by runs (default), random order with fixed seed
+train, test = r.split(unit="run", test_pct=0.10, seed=42)
+
+# Example B: exact-size test by steps (may overshoot slightly to whole runs)
+train2, test2 = r.split(unit="step", test_size=50_000, seed=123)
+
+# Feed step-level batches into two DataLoaders
+for (pre, dirs, evs) in train.iter_step_batches(batch_size=4096, shuffle=True, seed=0):
+    pass
+for (pre, dirs, evs) in test.iter_step_batches(batch_size=4096, shuffle=True, seed=0):
+    pass
+
+# You can also get run-level batches restricted to a view
+for runs in train.iter_batches(batch_size=64, shuffle=True, seed=99):
+    pass
+```
+
+Parameters:
+- unit: "run" (default) avoids correlated leakage; "step" hits step targets by adding whole runs.
+- test_pct: float in (0,1); deterministic selection with `seed` when `order="random"`.
+- test_size: integer in the chosen unit; mutually exclusive with `test_pct`.
+- seed: RNG seed (default 0) for deterministic random ordering.
+- order: "random" (default) or "sequential" (respect pack order before splitting).
+
+Behavior and edge cases:
+- For `test_pct` with `unit="run"`: uses `floor(pct * num_runs)`, clamped to at least 1 when `pct>0`.
+- For `unit="step"`: greedily adds whole runs until the target step count is reached or exceeded.
+- Train/test are disjoint and cover the selected universe (runs).
 
 ## Initialize a Board from a Step
 

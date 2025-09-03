@@ -63,6 +63,107 @@ impl PyPackReader {
         })
     }
 
+    /// Create deterministic train/test views over this packfile.
+    ///
+    /// Parameters:
+    /// - unit: "run" (default; split by runs) or "step" (split targeting total steps; may overshoot to whole runs).
+    /// - test_pct: fraction in (0,1) for test partition size (mutually exclusive with test_size).
+    /// - test_size: integer count in the chosen unit (mutually exclusive with test_pct).
+    /// - seed: RNG seed for deterministic random ordering when order = "random" (default 0).
+    /// - order: "random" (default) or "sequential" (respect pack order before carving off test set).
+    ///
+    /// Returns (train_view, test_view). Train and test are disjoint and cover the selected universe.
+    #[pyo3(signature = (unit=None, test_pct=None, test_size=None, seed=None, order=None))]
+    pub fn split(
+        &self,
+        py: Python<'_>,
+        unit: Option<&str>,
+        test_pct: Option<f64>,
+        test_size: Option<usize>,
+        seed: Option<u64>,
+        order: Option<&str>,
+    ) -> PyResult<(Py<PyPackView>, Py<PyPackView>)> {
+        let unit = unit.unwrap_or("run");
+        if !(unit == "run" || unit == "step") {
+            return Err(pyo3::exceptions::PyValueError::new_err("unit must be 'run' or 'step'"));
+        }
+        if test_pct.is_some() && test_size.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err("provide only one of test_pct or test_size"));
+        }
+        if test_pct.is_none() && test_size.is_none() {
+            return Err(pyo3::exceptions::PyValueError::new_err("must provide test_pct or test_size"));
+        }
+        if let Some(p) = test_pct { if !(p > 0.0 && p < 1.0) {
+            return Err(pyo3::exceptions::PyValueError::new_err("test_pct must be in (0,1)"));
+        }}
+        let order = order.unwrap_or("random");
+        if !(order == "random" || order == "sequential") {
+            return Err(pyo3::exceptions::PyValueError::new_err("order must be 'random' or 'sequential'"));
+        }
+
+        let n_runs = self.inner.len();
+        let mut idxs: Vec<usize> = (0..n_runs).collect();
+        if order == "random" {
+            let mut rng = StdRng::seed_from_u64(seed.unwrap_or(0));
+            idxs.as_mut_slice().shuffle(&mut rng);
+        }
+
+        // Helper to decode step counts for all runs
+        let steps_for = |i: usize| -> PyResult<usize> {
+            let inner = self.inner.clone();
+            let run = py.allow_threads(move || inner.decode_auto_v2(i).map_err(map_pack_err))?;
+            Ok(run.meta.steps as usize)
+        };
+
+        enum ViewUnit { Run, Step }
+        let vunit = if unit == "run" { ViewUnit::Run } else { ViewUnit::Step };
+
+        // Determine test selection
+        let test_runs: Vec<usize> = match vunit {
+            ViewUnit::Run => {
+                let target = if let Some(p) = test_pct {
+                    let mut c = (p * (n_runs as f64)).floor() as usize;
+                    if c == 0 && p > 0.0 { c = 1; }
+                    c.min(n_runs)
+                } else {
+                    test_size.unwrap().min(n_runs)
+                };
+                idxs[..target].to_vec()
+            }
+            ViewUnit::Step => {
+                // Compute total steps if pct
+                let total_steps = if test_pct.is_some() {
+                    let mut total = 0usize;
+                    for &i in &idxs { total += steps_for(i)?; }
+                    total
+                } else { 0 };
+                let target_steps = if let Some(p) = test_pct {
+                    ((p * (total_steps as f64)).floor() as usize).max(1)
+                } else {
+                    test_size.unwrap().max(1)
+                };
+                let mut acc = 0usize;
+                let mut chosen: Vec<usize> = Vec::new();
+                for &i in &idxs {
+                    let s = steps_for(i)?;
+                    chosen.push(i);
+                    acc += s;
+                    if acc >= target_steps { break; }
+                }
+                chosen
+            }
+        };
+
+        // Train = all minus test
+        use std::collections::HashSet;
+        let test_set: HashSet<usize> = test_runs.iter().copied().collect();
+        let train_runs: Vec<usize> = (0..n_runs).filter(|i| !test_set.contains(i)).collect();
+
+        let train = Py::new(py, PyPackView::new(self.inner.clone(), unit == "run", train_runs))?;
+        let test = Py::new(py, PyPackView::new(self.inner.clone(), unit == "run", test_runs))?;
+        Ok((train, test))
+    }
+
     fn __len__(&self) -> usize {
         self.inner.len()
     }
@@ -362,3 +463,90 @@ impl PyStepBatchesIter {
 }
 
 // Add to existing PyPackReader methods block above
+
+// ------------------------
+// PackView: a view over a subset
+// ------------------------
+
+#[pyclass(module = "ai_2048", name = "PackView")]
+pub struct PyPackView {
+    reader: Arc<ser::PackReader>,
+    // if by_runs == true, `runs` is the selected run indices and iter_step_batches will expand them to step pairs
+    // if by_runs == false (step-based split), we still keep selected runs and build step pairs from them on demand
+    runs: Vec<usize>,
+    by_runs: bool,
+}
+
+impl PyPackView {
+    pub fn new(reader: Arc<ser::PackReader>, by_runs: bool, runs: Vec<usize>) -> Self {
+        Self { reader, runs, by_runs }
+    }
+}
+
+#[pymethods]
+impl PyPackView {
+    fn __len__(&self) -> usize { self.runs.len() }
+
+    /// Iterate step-level batches restricted to this view.
+    /// Parameters mirror `PackReader::iter_step_batches` but operate only on the selected runs.
+    #[pyo3(signature = (batch_size, shuffle=None, seed=None))]
+    pub fn iter_step_batches(
+        &self,
+        py: Python<'_>,
+        batch_size: usize,
+        shuffle: Option<bool>,
+        seed: Option<u64>,
+    ) -> PyResult<Py<PyStepBatchesIter>> {
+        // Materialize (run_idx, step_idx) pairs for only the selected runs
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        for &ri in &self.runs {
+            let reader = self.reader.clone();
+            let steps = py.allow_threads(move || reader.decode_auto_v2(ri).map_err(map_pack_err))?.meta.steps as usize;
+            for si in 0..steps { pairs.push((ri, si)); }
+        }
+        if shuffle.unwrap_or(false) {
+            let mut rng = StdRng::seed_from_u64(seed.unwrap_or(0));
+            pairs.as_mut_slice().shuffle(&mut rng);
+        }
+        Py::new(
+            py,
+            PyStepBatchesIter {
+                reader: self.reader.clone(),
+                pairs,
+                pos: 0,
+                batch_size,
+            },
+        )
+    }
+
+    /// Iterate run-level batches restricted to this view.
+    #[pyo3(signature = (batch_size, shuffle=None, seed=None))]
+    pub fn iter_batches(
+        &self,
+        py: Python<'_>,
+        batch_size: usize,
+        shuffle: Option<bool>,
+        seed: Option<u64>,
+    ) -> PyResult<Py<PyPackBatchesIter>> {
+        let mut idxs = self.runs.clone();
+        if shuffle.unwrap_or(false) {
+            let mut rng = StdRng::seed_from_u64(seed.unwrap_or(0));
+            idxs.as_mut_slice().shuffle(&mut rng);
+        }
+        Py::new(
+            py,
+            PyPackBatchesIter { reader: self.reader.clone(), idxs, pos: 0, batch_size },
+        )
+    }
+
+    /// Simple iterator over runs in this view.
+    pub fn iter(&self, py: Python<'_>) -> PyResult<Py<PyPackIter>> {
+        Py::new(
+            py,
+            PyPackIter { reader: self.reader.clone(), idxs: self.runs.clone(), pos: 0 },
+        )
+    }
+
+    /// Return the run indices backing this view.
+    pub fn indices(&self) -> Vec<usize> { self.runs.clone() }
+}
