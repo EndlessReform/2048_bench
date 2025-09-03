@@ -63,6 +63,9 @@ enum Command {
         /// Decode/serialize in parallel
         #[arg(long, default_value_t = true)]
         parallel: bool,
+        /// Export one line per step (flattened). Default: one line per run.
+        #[arg(long, default_value_t = false)]
+        by_step: bool,
     },
     /// Extract specific runs by index
     Extract {
@@ -129,10 +132,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("max_len: {}", s.max_len);
             println!("mean_len: {:.3}", s.mean_len);
         }
-        Command::ToJsonl { packfile, output, parallel } => {
+        Command::ToJsonl { packfile, output, parallel, by_step } => {
             let r = PackReader::open(&packfile)?;
-            r.to_jsonl(&output, parallel)?;
-            eprintln!("Wrote JSONL to {}", output.display());
+            r.to_jsonl(&output, parallel, by_step)?;
+            eprintln!("Wrote {} JSONL to {}", if by_step {"per-step"} else {"per-run"}, output.display());
         }
         Command::Extract { packfile, indices, output } => {
             let r = PackReader::open(&packfile)?;

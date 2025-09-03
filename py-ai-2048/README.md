@@ -154,7 +154,10 @@ for batch in r.iter_batches(batch_size=256, shuffle=True, seed=123):
     pass
 
 # Bulk JSONL export (fast Rust path)
+# Per-run (one JSON object per run)
 r.to_jsonl("/tmp/runs.jsonl", parallel=True)
+# Per-step (one JSON object per step; includes run_uuid and step_idx)
+r.to_jsonl("/tmp/steps.jsonl", parallel=True, by_step=True)
 ```
 
 Notes

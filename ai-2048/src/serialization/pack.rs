@@ -248,7 +248,9 @@ impl PackReader {
         res
     }
 
-    pub fn to_jsonl<P: AsRef<Path>>(&self, out: P, parallel: bool) -> Result<(), PackError> {
+    /// Export the packfile to a JSONL file.
+    /// If `by_step` is false, writes one line per run; if true, writes one line per step (flattened).
+    pub fn to_jsonl<P: AsRef<Path>>(&self, out: P, parallel: bool, by_step: bool) -> Result<(), PackError> {
         let mut f = File::create(out)?;
         let indices: Vec<usize> = (0..self.len()).collect();
         if parallel {
@@ -257,9 +259,17 @@ impl PackReader {
                 .map(|chunk| {
                     let mut buf: Vec<u8> = Vec::with_capacity(256 * 256);
                     for &i in chunk {
-                        let run = self.decode_auto_v2(i)?;
-                        write_run_jsonl_line(&mut buf, i as u64, &run)
-                            .map_err(|e| PackError::Decode(e.to_string()))?;
+                        if by_step {
+                            let slice = self.get_slice(i)?;
+                            let run = self.decode_auto_v2(i)?;
+                            let run_uuid = compute_run_uuid(i as u64, slice);
+                            write_step_jsonl_lines(&mut buf, i as u64, &run_uuid, &run)
+                                .map_err(|e| PackError::Decode(e.to_string()))?;
+                        } else {
+                            let run = self.decode_auto_v2(i)?;
+                            write_run_jsonl_line(&mut buf, i as u64, &run)
+                                .map_err(|e| PackError::Decode(e.to_string()))?;
+                        }
                     }
                     Ok::<Vec<u8>, PackError>(buf)
                 })
@@ -270,9 +280,17 @@ impl PackReader {
         } else {
             let mut buf: Vec<u8> = Vec::with_capacity(256 * 256);
             for i in indices {
-                let run = self.decode_auto_v2(i)?;
-                write_run_jsonl_line(&mut buf, i as u64, &run)
-                    .map_err(|e| PackError::Decode(e.to_string()))?;
+                if by_step {
+                    let slice = self.get_slice(i)?;
+                    let run = self.decode_auto_v2(i)?;
+                    let run_uuid = compute_run_uuid(i as u64, slice);
+                    write_step_jsonl_lines(&mut buf, i as u64, &run_uuid, &run)
+                        .map_err(|e| PackError::Decode(e.to_string()))?;
+                } else {
+                    let run = self.decode_auto_v2(i)?;
+                    write_run_jsonl_line(&mut buf, i as u64, &run)
+                        .map_err(|e| PackError::Decode(e.to_string()))?;
+                }
                 if buf.len() > 1_000_000 {
                     f.write_all(&buf)?;
                     buf.clear();
@@ -446,6 +464,72 @@ fn write_run_jsonl_line(
     };
     serde_json::to_writer(&mut *buf, &rec)?;
     buf.push(b'\n');
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct BranchJson { legal: bool, value: f32 }
+
+#[derive(serde::Serialize)]
+struct StepJson<'a> {
+    run_idx: u64,
+    run_uuid: &'a str,
+    step_idx: u32,
+    // optional run context for convenience
+    steps: u32,
+    start_unix_s: u64,
+    // step payload
+    pre_board: u64,
+    chosen: &'static str,
+    branches: [BranchJson; 4], // Up, Down, Left, Right
+}
+
+fn compute_run_uuid(run_idx: u64, slice: &[u8]) -> String {
+    // Stable identifier based on content + index; not a formal UUID but globally stable for the pack.
+    // Format: a2r-<crc32c(slice)>-<run_idx>
+    let crc = crc32c(slice);
+    format!("a2r-{:08x}-{:08x}", crc, run_idx as u32)
+}
+
+fn write_step_jsonl_lines(
+    buf: &mut Vec<u8>,
+    run_idx: u64,
+    run_uuid: &str,
+    run: &RunV2,
+) -> Result<(), serde_json::Error> {
+    let m = &run.meta;
+    for (si, s) in run.steps.iter().enumerate() {
+        let chosen = match s.chosen {
+            crate::engine::Move::Up => "UP",
+            crate::engine::Move::Down => "DOWN",
+            crate::engine::Move::Left => "LEFT",
+            crate::engine::Move::Right => "RIGHT",
+        };
+        let branches_arr = if let Some(arr) = s.branches {
+            arr
+        } else {
+            let mut tmp = [crate::serialization::BranchV2::Illegal; 4];
+            let idx = match s.chosen { crate::engine::Move::Up => 0, crate::engine::Move::Down => 1, crate::engine::Move::Left => 2, crate::engine::Move::Right => 3 };
+            tmp[idx] = crate::serialization::BranchV2::Legal(1.0);
+            tmp
+        };
+        let branches = branches_arr.map(|b| match b {
+            crate::serialization::BranchV2::Illegal => BranchJson { legal: false, value: 0.0 },
+            crate::serialization::BranchV2::Legal(v) => BranchJson { legal: true, value: v },
+        });
+        let rec = StepJson {
+            run_idx,
+            run_uuid,
+            step_idx: si as u32,
+            steps: m.steps,
+            start_unix_s: m.start_unix_s,
+            pre_board: s.pre_board,
+            chosen,
+            branches,
+        };
+        serde_json::to_writer(&mut *buf, &rec)?;
+        buf.push(b'\n');
+    }
     Ok(())
 }
 

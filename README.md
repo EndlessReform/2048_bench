@@ -123,7 +123,11 @@ use ai_2048::serialization::PackReader;
 let pack = PackReader::open("dataset.a2pack")?;
 println!("runs: {}", pack.len());
 let run = pack.decode_auto_v2(0)?; // v1 auto-upgraded to v2
-pack.to_jsonl("runs.jsonl", true)?; // fast JSONL export (parallel)
+// fast JSONL export (parallel)
+// Per-run (one JSON object per run)
+pack.to_jsonl("runs.jsonl", true, false)?;
+// Per-step (one JSON object per step; includes run_uuid and step_idx)
+pack.to_jsonl("steps.jsonl", true, true)?;
 ```
 
 Reading a packfile from Python (PyO3):
@@ -135,14 +139,18 @@ r = a2.PackReader.open("dataset.a2pack")
 print(r.stats.count, r.stats.mean_len)
 run0 = r.decode(0)                # -> RunV2 (v1 auto-upgraded)
 batch = r.decode_batch([0, 5, 42])
+# Per-run JSONL
 r.to_jsonl("runs.jsonl", parallel=True)
+# Per-step JSONL (flattened)
+r.to_jsonl("steps.jsonl", parallel=True, by_step=True)
 ```
 
 Additional CLI commands:
 
 - Validate: `cargo run -q -p ai-2048 --bin a2pack -- validate --packfile dataset.a2pack`
 - Stats: `cargo run -q -p ai-2048 --bin a2pack -- stats --packfile dataset.a2pack`
-- To JSONL: `cargo run -q -p ai-2048 --bin a2pack -- to-jsonl --packfile dataset.a2pack --output runs.jsonl --parallel`
+- To JSONL (per-run): `cargo run -q -p ai-2048 --bin a2pack -- to-jsonl --packfile dataset.a2pack --output runs.jsonl --parallel`
+- To JSONL (per-step): `cargo run -q -p ai-2048 --bin a2pack -- to-jsonl --packfile dataset.a2pack --output steps.jsonl --parallel --by-step`
 - Extract runs: `cargo run -q -p ai-2048 --bin a2pack -- extract --packfile dataset.a2pack --indices 0,5,42 --output out/`
 - Inspect run: `cargo run -q -p ai-2048 --bin a2pack -- inspect --packfile dataset.a2pack --index 123`
 
