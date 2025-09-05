@@ -192,6 +192,39 @@ Notes:
 - Only `.a2run2` (postcard-v2) runs are supported in the builder.
 - The binary layout and motivation are described in `docs/2048-pack.md`.
 
+Incremental append new runs (atomic rewrite):
+
+```
+cargo run -q -p ai-2048 --bin datapack -- append --pack dataset.dat --input /path/to/new_runs --output dataset.dat
+```
+
+- Writes to `dataset.dat.tmp` and atomically renames to `dataset.dat` on success.
+- Keeps memory bounded to the new runs; existing `.dat` is streamed, not fully loaded.
+
+Merge two packs (A then B):
+
+```
+cargo run -q -p ai-2048 --bin datapack -- merge --a a.dat --b b.dat --output merged.dat
+```
+
+- Preserves order A then B. Adjusts B run ids and step indices automatically.
+
+Time load and index creation costs:
+
+```
+cargo run -q -p ai-2048 --bin datapack -- time-load --pack dataset.dat
+```
+
+- Prints file size, runs, steps, total load time, and reindex time.
+
+Benchmark random batch reads (e.g., batch size 768):
+
+```
+cargo run -q -p ai-2048 --bin datapack -- bench-batches --pack dataset.dat --batch 768 --iters 10000 --pregenerate true
+```
+
+- `--pregenerate true` excludes RNG overhead from timing. Increase `--iters` for steadier numbers on large packs.
+
 
 
 **Development**
