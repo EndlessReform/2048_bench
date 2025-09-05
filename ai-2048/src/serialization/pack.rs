@@ -774,7 +774,7 @@ mod tests {
         // quantiles may be zero for fallback compute
 
         let out = NamedTempFile::new().unwrap();
-        reader.to_jsonl(out.path(), true).unwrap();
+        reader.to_jsonl(out.path(), true, false, true).unwrap();
         // sanity: file non-empty and contains two lines
         let mut s = String::new();
         File::open(out.path())

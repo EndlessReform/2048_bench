@@ -43,6 +43,10 @@ path = "src/bin/parallel.rs"
 name = "visualize"
 path = "src/bin/visualize.rs"
 
+[[bin]]
+name = "datapack"
+path = "src/bin/datapack.rs"
+
 [dev-dependencies]
 criterion = "0.7.0"
 tempfile = "3.21.0"

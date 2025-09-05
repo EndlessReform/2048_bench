@@ -7,6 +7,7 @@
 
 mod v2;
 mod pack;
+mod datapack;
 
 pub use v2::{
     BranchV2,
@@ -26,4 +27,12 @@ pub use pack::{
     PackError,
     RunKind,
     PackStats,
+};
+
+pub use datapack::{
+    DataPack,
+    DataPackError,
+    Step,
+    RunMeta,
+    PackBuilder,
 };

@@ -4,6 +4,7 @@
 //! - A compact `Board` type with ergonomic methods (`shift`, `make_move`, `score`, ...)
 //! - An Expectimax AI (`expectimax` module) with single-threaded and parallel variants
 //! - A binary trace format for runs (`trace` module)
+//! - Dataset pack utilities for RAM-friendly training data (`serialization::DataPack`, `serialization::PackBuilder`)
 //!
 //! Quick start:
 //! ```

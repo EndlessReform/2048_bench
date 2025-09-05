@@ -154,6 +154,45 @@ Additional CLI commands:
 - Extract runs: `cargo run -q -p ai-2048 --bin a2pack -- extract --packfile dataset.a2pack --indices 0,5,42 --output out/`
 - Inspect run: `cargo run -q -p ai-2048 --bin a2pack -- inspect --packfile dataset.a2pack --index 123`
 
+### Dataset Pack (.dat) — RAM-friendly
+
+For shuffled training workloads, load all steps into RAM using the dataset pack format. This flattens all runs into a single steps array with lightweight run metadata. Loading is parallelized.
+
+Build a dataset pack from `.a2run2` files:
+
+```
+cargo run -q -p ai-2048 --bin datapack -- build --input /path/to/runs --output dataset.dat
+```
+
+Validate and inspect:
+
+```
+cargo run -q -p ai-2048 --bin datapack -- validate --pack dataset.dat
+cargo run -q -p ai-2048 --bin datapack -- stats --pack dataset.dat
+cargo run -q -p ai-2048 --bin datapack -- inspect --pack dataset.dat --index 0
+```
+
+Programmatic usage (Rust):
+
+```rust
+use ai_2048::serialization::{PackBuilder, DataPack};
+use std::path::Path;
+
+// Build and save
+// let pb = PackBuilder::from_directory(Path::new("runs/"))?;
+// pb.write_to_file("dataset.dat")?;
+
+// Load into memory (parallel decode by default)
+// let dp = DataPack::load(Path::new("dataset.dat"))?;
+// assert!(dp.steps.len() > 0);
+# Ok::<(), Box<dyn std::error::Error>>(())
+```
+
+Notes:
+- Only `.a2run2` (postcard-v2) runs are supported in the builder.
+- The binary layout and motivation are described in `docs/2048-pack.md`.
+
+
 
 **Development**
 - Tests: `cargo test` (all tests should pass).
