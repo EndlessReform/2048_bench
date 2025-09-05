@@ -145,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::fs::create_dir_all(&output)?;
             let idxs = parse_indices(&indices)?;
             for i in idxs {
-                let bytes = r.get_slice(i).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                let bytes = r.get_slice(i).map_err(|e| io::Error::other(e.to_string()))?;
                 let out = output.join(format!("run-{:06}.a2run2", i));
                 let mut f = File::create(&out)?;
                 f.write_all(bytes)?;
@@ -154,7 +154,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Command::Inspect { packfile, index } => {
             let r = PackReader::open(&packfile)?;
-            let run = r.decode_auto_v2(index).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            let run = r.decode_auto_v2(index).map_err(|e| io::Error::other(e.to_string()))?;
             println!("packfile: {}", packfile.display());
             println!("index: {}", index);
             println!("steps: {}", run.meta.steps);
@@ -305,11 +305,11 @@ fn pack_dir(
         let data = std::fs::read(&ent.path)?;
         let s = if ent.kind == 2 {
             let run: ser::RunV2 = ser::from_postcard_bytes(&data)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             run.meta.steps
         } else {
             let run = ai_2048::trace::parse_run_bytes(&data)
-                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+                .map_err(|e| io::Error::other(e.to_string()))?;
             run.meta.steps
         };
         steps.push(s);
@@ -334,11 +334,11 @@ fn pack_dir(
     #[derive(serde::Serialize)]
     struct StatsBlock { count: u64, total_steps: u64, min_len: u32, max_len: u32, mean_len: f64, p50: u32, p90: u32, p99: u32 }
     let sb = StatsBlock { count: count_u64, total_steps, min_len, max_len, mean_len, p50, p90, p99 };
-    let sb_bytes = postcard::to_allocvec(&sb).map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+    let sb_bytes = postcard::to_allocvec(&sb).map_err(|e| io::Error::other(e.to_string()))?;
     let stats_offset = written;
     out.write_all(&(sb_bytes.len() as u32).to_le_bytes())?;
     out.write_all(&sb_bytes)?;
-    written += 4 + sb_bytes.len();
+    // bytes written not used beyond this point; omit to keep clippy happy
 
     // Footer (fixed 32 bytes, with 4-byte pad at end)
     let index_crc = crc32c(&index_bytes);
@@ -363,8 +363,8 @@ fn pack_dir(
 
 fn compute_len_kind_crc(path: &Path, entry_crc: bool) -> io::Result<(u32, u16, u32)> {
     let mut f = File::open(path)?;
-    let mut buf4 = [0u8; 4];
-    let mut buf8 = [0u8; 8];
+    let _buf4 = [0u8; 4];
+    let _buf8 = [0u8; 8];
     // Try read first 6 bytes (magic+version?) for v1 detection
     let mut head = [0u8; 6];
     let mut read = 0usize;

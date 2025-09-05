@@ -45,7 +45,9 @@ pub enum DataPackError {
 /// - `run_id`: zero-based run identifier
 /// - `index_in_run`: step index within the run
 /// - `move_dir`: 0=Up, 1=Down, 2=Left, 3=Right
-/// - `_padding`: reserved to keep size at 32 bytes
+/// - `ev_mask`: bitmask (bit i -> branch i is legal)
+/// - `ev_q`: 4×`u16` quantized branch EVs in [0, 65535] corresponding to [Up, Down, Left, Right]
+/// - `_pad`: reserved to keep size at 32 bytes
 #[repr(C)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Step {
@@ -53,7 +55,9 @@ pub struct Step {
     pub run_id: u32,
     pub index_in_run: u32,
     pub move_dir: u8,       // 0..=3
-    pub _padding: [u8; 15],
+    pub ev_mask: u8,        // bit i set => branch i is legal
+    pub ev_q: [u16; 4],     // quantized EVs (normalized [0,1])
+    pub _pad: [u8; 5],
 }
 
 // Safety: Step is a plain-old-data type composed of integers and a fixed-size byte array.
@@ -221,7 +225,7 @@ impl DataPack {
 
         // Parallel decode of steps into a preallocated vector.
         debug_assert!(align_of::<Step>() <= 8);
-        let mut steps: Vec<Step> = vec![Step { board: 0, run_id: 0, index_in_run: 0, move_dir: 0, _padding: [0; 15] }; num_steps];
+        let mut steps: Vec<Step> = vec![Step { board: 0, run_id: 0, index_in_run: 0, move_dir: 0, ev_mask: 0, ev_q: [0; 4], _pad: [0; 5] }; num_steps];
         steps
             .par_iter_mut()
             .enumerate()
@@ -232,7 +236,12 @@ impl DataPack {
                 let run_id = u32::from_le_bytes(steps_region[p + 8..p + 12].try_into().unwrap());
                 let index_in_run = u32::from_le_bytes(steps_region[p + 12..p + 16].try_into().unwrap());
                 let move_dir = steps_region[p + 16];
-                *out = Step { board, run_id, index_in_run, move_dir, _padding: [0; 15] };
+                let ev_mask = steps_region[p + 17];
+                let ev_q0 = u16::from_le_bytes(steps_region[p + 18..p + 20].try_into().unwrap());
+                let ev_q1 = u16::from_le_bytes(steps_region[p + 20..p + 22].try_into().unwrap());
+                let ev_q2 = u16::from_le_bytes(steps_region[p + 22..p + 24].try_into().unwrap());
+                let ev_q3 = u16::from_le_bytes(steps_region[p + 24..p + 26].try_into().unwrap());
+                *out = Step { board, run_id, index_in_run, move_dir, ev_mask, ev_q: [ev_q0, ev_q1, ev_q2, ev_q3], _pad: [0; 5] };
             });
 
         // Parse run metadata
@@ -379,12 +388,30 @@ impl PackBuilder {
                     crate::engine::Move::Left => 2u8,
                     crate::engine::Move::Right => 3u8,
                 };
+                // Require branch EVs present; no backward-compat synth.
+                let branches = s.branches.expect("missing branches in v2 run; .dat requires EVs");
+                let mut ev_mask: u8 = 0;
+                let mut ev_q = [0u16; 4];
+                let chosen_idx = dir as usize;
+                for (bi, b) in branches.iter().enumerate() {
+                    match *b {
+                        crate::serialization::BranchV2::Illegal => { /* bit stays 0, ev_q unused */ }
+                        crate::serialization::BranchV2::Legal(v) => {
+                            ev_mask |= 1u8 << (bi as u8);
+                            // Preserve exact 1.0 for the chosen branch to avoid label drift
+                            if bi == chosen_idx { ev_q[bi] = 65535; }
+                            else { ev_q[bi] = quantize_ev(v); }
+                        }
+                    }
+                }
                 steps.push(Step {
                     board: s.pre_board,
                     run_id: rid,
                     index_in_run: i as u32,
                     move_dir: dir,
-                    _padding: [0; 15],
+                    ev_mask,
+                    ev_q,
+                    _pad: [0; 5],
                 });
             }
             let num_steps = run.meta.steps;
@@ -413,13 +440,20 @@ impl PackBuilder {
     }
 }
 
+#[inline]
+fn quantize_ev(v: f32) -> u16 {
+    let clamped = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+    let q = (clamped * 65535.0 + 0.5) as u32;
+    q.min(65535) as u16
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
 
     fn mk_step(run_id: u32, idx: u32, board: u64, dir: u8) -> Step {
-        Step { board, move_dir: dir, run_id, index_in_run: idx, _padding: [0; 15] }
+        Step { board, run_id, index_in_run: idx, move_dir: dir, ev_mask: 0b0101, ev_q: [65535, 0, 32768, 0], _pad: [0; 5] }
     }
 
     #[test]
@@ -450,6 +484,8 @@ mod tests {
         assert_eq!(loaded.steps[0].board, 0x1000_0000_0000_0000);
         assert_eq!(loaded.steps[1].move_dir, 3);
         assert_eq!(loaded.steps[2].run_id, 1);
+        assert_eq!(loaded.steps[0].ev_mask & 0b0001, 1);
+        assert!(loaded.steps[0].ev_q[0] >= 60000);
         assert_eq!(loaded.runs[0].engine, "e1");
         assert_eq!(loaded.runs[1].engine, "");
         assert_eq!(loaded.runs_by_score.len(), 2);

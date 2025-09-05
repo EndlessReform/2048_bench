@@ -7,13 +7,8 @@ Purpose: replace the legacy `.a2pack` container with the RAM-friendly dataset fo
 - Parallel default loading: step decode parallelized with Rayon.
 - PackBuilder: recursive `.a2run2` loader (parallel), `build`, `write_to_file`.
 - New CLI `datapack`: `build`, `validate`, `stats`, `inspect`.
-
-## Phase 3 — PyO3 Dataset
-- Class: `Dataset` backed by `Arc<DataPack>`.
-  - `__len__`, `get_batch(indices)` returning NumPy arrays (boards; later moves/branches as needed).
-  - `filter_by_score(min, max)` producing a filtered view (indices only; no copying).
-  - Deterministic shuffle support via `StdRng::seed_from_u64` where applicable.
-- Keep existing `PackReader` Python API available during transition; mark as legacy in docs.
+- PyO3 Dataset: `Dataset` with `__len__`, `get_batch`, and `filter_by_score`.
+- README and crate docs updated; tests added for Dataset.
 
 ## Validation & Tests
 - Rust unit tests:
@@ -25,8 +20,20 @@ Purpose: replace the legacy `.a2pack` container with the RAM-friendly dataset fo
 - Optional: quick `stats` test (count, total steps, mins/maxes) to mirror builder outputs.
 
 ## Migration & Interop
-- Provide a CLI to build `pack.dat` directly from `.a2run2`.
+- Provide a CLI to build `pack.dat` directly from `.a2run2`. (Done)
 - Optional one-shot converter from `.a2pack` using existing Rust `PackReader` to bootstrap large datasets. (Low priority)
+
+## Future Work (Roadmap)
+- Incremental append: `DataPack::append_from_directory` to add new runs and rebuild indices.
+- Additional filters/views in Python: by engine, run length, highest tile, time ranges.
+- Numpy outputs: return `numpy.ndarray` for boards/dirs to reduce Python overhead.
+- Optional `.idx` sidecar: precomputed lookup/index file; rebuildable from `.dat`.
+- Cached stats: embed a compact stats block (or sidecar) to avoid rescans.
+- Magic/version: consider `b"A2DP"` and explicit endianness; document LE requirement.
+- Compression: evaluate zstd at file level; avoid on-disk per-step compression initially.
+- Sharding: split very large packs by time/size (e.g., `pack_0001.dat`, `pack_0002.dat`).
+- Benchmarks: larger-scale random-read benches (10–100M steps) and memory footprint tracking.
+- Migration tool: fast `.a2pack` → `.dat` converter using `PackReader` (if needed).
 - Document the deprecation path for `.a2pack` readers once the new flow is stable.
 
 ## Decisions To Lock Down (Spec Clarifications)

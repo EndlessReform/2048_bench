@@ -6,7 +6,7 @@
 
 use ai_2048::serialization::{DataPack, RunMeta, Step};
 use ai_2048::engine::state::Board as RsBoard;
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
 fn make_synth_datapack(total_runs: usize, steps_per_run: usize, seed: u64) -> DataPack {
@@ -69,7 +69,7 @@ fn bench_random_read_batches(c: &mut Criterion) {
                         let exps: [u8; 16] = exps_vec.try_into().unwrap();
                         out.push(exps);
                     }
-                    black_box(out)
+                    std::hint::black_box(out)
                 },
                 BatchSize::SmallInput,
             );
@@ -89,7 +89,7 @@ fn bench_random_read_batches(c: &mut Criterion) {
                         let exps: [u8; 16] = exps_vec.try_into().unwrap();
                         out.push(exps);
                     }
-                    black_box(out)
+                    std::hint::black_box(out)
                 },
                 BatchSize::SmallInput,
             );
@@ -100,4 +100,3 @@ fn bench_random_read_batches(c: &mut Criterion) {
 
 criterion_group!(benches, bench_random_read_batches);
 criterion_main!(benches);
-

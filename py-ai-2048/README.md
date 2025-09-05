@@ -1,6 +1,6 @@
 # PyO3 Python Bindings for ai-2048
 
-High-performance Python bindings for the ai-2048 Rust library: a fast 2048 engine with an Expectimax AI and run serialization (v2, postcard).
+High-performance Python bindings for the ai-2048 Rust library: a fast 2048 engine with an Expectimax AI, v2 run serialization (postcard), and a RAM-friendly dataset pack for shuffled ML training.
 
 ## What’s Implemented
 
@@ -9,7 +9,7 @@ High-performance Python bindings for the ai-2048 Rust library: a fast 2048 engin
 - Rng: deterministic RNG wrapper around Rust `StdRng` with `clone()`.
 - Expectimax (single-thread): `best_move`, `branch_evals`, `state_value`, `last_stats`, `reset_stats`.
 - Serialization (v2): `RunV2`, `StepV2`, `Meta`, `BranchV2`, file and bytes I/O, `normalize_branches_py`.
-- Packfile reader: `PackReader` for fast, low-overhead access to packed `.a2run2` datasets. Includes random access, batched decode, iterators, JSONL export, and summary stats.
+- Dataset pack: `Dataset` for fast, in-RAM, randomly shuffled step reads from a single `.dat` file built from `.a2run2` runs.
 - Python protocols: `__str__`, `__repr__`, `__eq__`, `__hash__`, `__iter__` for `Board`.
 
 ## Build & Test
@@ -117,87 +117,107 @@ run2 = RunV2.from_bytes(data)
 # Files
 run.save("/tmp/roundtrip.a2run2")
 run3 = RunV2.load("/tmp/roundtrip.a2run2")
+```
 
-## Reading Packed Datasets (PackReader)
+## Dataset Pack (.dat) — RAM-friendly (shuffled reads)
 
-The `PackReader` API provides high-throughput access to many `.a2run2` runs stored in a single indexed `.a2pack` file. Build packs with the Rust CLI (`a2pack`) from the repository root (see the top-level README).
+For shuffled training over large step datasets, build a `.dat` file (RAM-friendly) and read via `Dataset`.
 
-Open a packfile and inspect:
+Build a `.dat` from `.a2run2` runs (Rust CLI):
+
+```bash
+cargo run -q -p ai-2048 --bin datapack -- build --input /path/to/runs --output dataset.dat
+```
+
+Load in Python and feed into a PyTorch DataLoader:
 
 ```python
 import ai_2048 as a2
+import torch
+from torch.utils.data import Dataset, DataLoader
 
-r = a2.PackReader.open("/path/to/dataset.a2pack")
-print("runs:", len(r))
-print("stats:", r.stats.count, r.stats.mean_len)
+class StepsDataset(Dataset):
+    def __init__(self, dat_path: str):
+        self.ds = a2.Dataset(dat_path)
 
-# Random access
-a_run = r.decode(0)              # -> RunV2 (v1 upgraded automatically)
-print(a_run.meta.steps)
+    def __len__(self):
+        return len(self.ds)
 
-# Batched random access (parallel decode)
-batch = r.decode_batch([0, 5, 42])
-print([x.meta.steps for x in batch])
+    def __getitem__(self, idx):
+        # Fetch a single item via a 1-element batch
+        pre, dirs, brs = self.ds.get_batch([idx])
+        # pre is a list of one 16-exponent list; dirs is a list of one int; brs is a list of 4 BranchV2
+        exps = pre[0]             # length 16, 0=empty, 1->2, ...
+        dir_idx = dirs[0]         # 0:Up, 1:Down, 2:Left, 3:Right
+        # Convert BranchV2 list to float EV targets in [0,1]
+        evs = [b.value if b.is_legal else 0.0 for b in brs[0]]
+        return exps, dir_idx, evs
 
-# Iteration
-y = 0
-for run in r.iter():             # sequential; decodes off-thread
-    y += run.meta.steps
+def collate_steps(batch):
+    # Batch is a list of (exps, dir, evs)
+    exps = torch.tensor([b[0] for b in batch], dtype=torch.uint8)   # (N, 16)
+    dirs = torch.tensor([b[1] for b in batch], dtype=torch.long)    # (N,)
+    evs  = torch.tensor([b[2] for b in batch], dtype=torch.float32) # (N, 4)
+    return exps, dirs, evs
 
-# Specific-order iteration
-for run in r.iter_indices([2, 0, 1]):
-    print(run.meta.steps)
+ds = StepsDataset("dataset.dat")
+loader = DataLoader(ds, batch_size=3072, shuffle=True, num_workers=0, collate_fn=collate_steps)
 
-# Batches for dataloaders
-for batch in r.iter_batches(batch_size=256, shuffle=True, seed=123):
-    # batch is a list[RunV2]; deterministic order with seed
+for exps, dirs, evs in loader:
+    # exps: (B, 16) uint8 exponents (row-major c1r1..c4r4)
+    # dirs: (B,) long indices 0..3
+    # evs:  (B, 4) float32 targets in [0,1] (Up, Down, Left, Right)
+    # model training step here
     pass
 
-# Bulk JSONL export (fast Rust path)
-# Per-run (one JSON object per run)
-r.to_jsonl("/tmp/runs.jsonl", parallel=True)
-# Per-step (one JSON object per step; includes run_uuid, step_idx, and pre_board as 16 exponents)
-r.to_jsonl("/tmp/steps.jsonl", parallel=True, by_step=True)
-```
+### Reading EVs clearly (binning, argmax, numpy)
 
-Notes
-- All heavy decode/export runs in Rust; methods release the GIL for throughput.
-- Random access returns `RunV2`; legacy v1 runs are converted transparently.
-- `iter_batches(shuffle=True, seed=...)` provides deterministic shuffles for training.
-
-### Step-level batches for ML
-
-For training that consumes individual decision steps, use step-level batching. Each batch yields a tuple `(pre_boards, chosen_dirs, branch_evs)`:
+If you want to work directly with the `Dataset` without a custom `torch.utils.data.Dataset`, you can grab a small batch and convert to numpy easily:
 
 ```python
-for (pre_boards, chosen_dirs, branch_evs) in r.iter_step_batches(batch_size=1024, shuffle=True, seed=123):
-    # pre_boards: List[List[int]] with 16 exponents (0 empty, 1->2, 2->4, ...), row-major c1r1..c4r4
-    # chosen_dirs: List[int] with 0:Up, 1:Down, 2:Left, 3:Right
-    # branch_evs: List[List[BranchV2]] ordered [Up, Down, Left, Right]; chosen entry clamped to exactly 1.0 when maximal
-    pass
+import numpy as np
+import ai_2048 as a2
+
+ds = a2.Dataset("dataset.dat")
+
+# Pull an arbitrary mini-batch by indices
+pre, dirs, brs = ds.get_batch([0, 5, 10, 42])
+
+# Boards: convert 16-exponent lists to numpy (B, 16) uint8
+exps_np = np.asarray(pre, dtype=np.uint8)
+
+# Branch EVs: brs is a list of 4 BranchV2 per item -> convert to floats in [0,1]
+evs = np.array([[b.value if b.is_legal else 0.0 for b in branches] for branches in brs], dtype=np.float32)  # (B, 4)
+
+# Example A: bin by the maximum EV per item into 4 buckets (0–.25, .25–.5, .5–.75, .75–1.0]
+max_evs = evs.max(axis=1)
+bins = np.digitize(max_evs, bins=[0.25, 0.5, 0.75])  # -> 0..3
+
+# Example B: per-branch binning (e.g., one bucket per branch above 0.8)
+high_mask = evs >= 0.8
+
+# Example C: argmax label of best branch (0:Up, 1:Down, 2:Left, 3:Right)
+labels = evs.argmax(axis=1)
+
+print(exps_np.shape, evs.shape, labels)
 ```
 
 Notes:
-- The iterator flattens all (run, step) pairs across the pack; `shuffle=True` with a `seed` makes order deterministic.
-- When branch EVs are absent on a step (legacy traces), `branch_evs` is synthesized as `[Illegal, Illegal, Illegal, Legal(1.0 at chosen)]`.
-- Performance: with `shuffle=False`, step batches stream run-by-run without an upfront scan; with `shuffle=True`, the iterator first computes all (run, step) pairs to shuffle deterministically, which may add a brief startup cost on very large packs (deterministic and paid once per iterator).
+- `pre` is already the exponent encoding (0 empty, 1->2, ...) in row-major `(c1r1..c4r4)` order; if you prefer values instead of exponents, convert via `np.where(exps_np == 0, 0, 2 ** exps_np)`.
+- `brs` elements are BranchV2 objects; use `b.value if b.is_legal else 0.0` to get float targets.
 
-### Train/Test Splits for DataLoaders
-
-Create deterministic train/test views directly from a packfile and feed them into separate PyTorch DataLoaders. Splits can target a percentage or an absolute size, and can be based on runs (default, no leakage) or steps (targets step counts; may overshoot to whole runs).
+Filtering example (score range view):
 
 ```python
-import ai_2048 as a2
+base = a2.Dataset("dataset.dat")
+mid_scores = base.filter_by_score(50_000, 500_000)
+print(len(mid_scores))  # number of steps in view
+```
 
-r = a2.PackReader.open("/path/to/dataset.a2pack")
-
-# Example A: 10% test by runs (default), random order with fixed seed
-train, test = r.split(unit="run", test_pct=0.10, seed=42)
-
-# Example B: exact-size test by steps (may overshoot slightly to whole runs)
-train2, test2 = r.split(unit="step", test_size=50_000, seed=123)
-
-# Feed step-level batches into two DataLoaders
+Notes:
+- Branch EVs are stored in `.dat` as quantized values with exact 0.0 and 1.0 endpoints; `Dataset.get_batch` returns a third value with 4 BranchV2 labels (Up, Down, Left, Right). The chosen branch is exactly 1.0.
+- The dataset is fully in memory; random access is just indexed reads of fixed-size records.
+```python
 for (pre, dirs, evs) in train.iter_step_batches(batch_size=4096, shuffle=True, seed=0):
     pass
 for (pre, dirs, evs) in test.iter_step_batches(batch_size=4096, shuffle=True, seed=0):

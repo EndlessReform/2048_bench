@@ -145,18 +145,19 @@ fn shift_vec_left(mut vec: Vec<Tile>) -> Vec<Tile> {
 
 fn calculate_left_shift(slice: &mut [Tile]) {
     let mut acc = 0;
-    for idx in 0..slice.len() {
-        let val = slice[idx];
+    for s in slice.iter_mut() {
+        let val = *s;
         if acc != 0 && acc == val {
-            slice[idx] = 0;
+            *s = 0;
             acc += 1;
             break;
         } else if acc != 0 && val != 0 && acc != val {
             break;
         } else if acc == 0 && val != 0 {
-            slice[idx] = 0;
+            *s = 0;
             acc = val;
-        };
+        }
+        // continue scan otherwise
     }
     slice[0] = acc;
 }
@@ -325,4 +326,3 @@ mod tests {
         assert_eq!(get_tile_val(empty_board, 15), 0);
     }
 }
-

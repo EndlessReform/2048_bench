@@ -172,6 +172,11 @@ impl PackReader {
     }
 
     #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.index_len == 0
+    }
+
+    #[inline]
     fn index_bytes(&self) -> &[u8] {
         &self.mmap[self.index_offset..self.index_offset + self.index_len * 32]
     }
@@ -284,7 +289,7 @@ impl PackReader {
                 .map(|chunk| {
                     let mut buf: Vec<u8> = Vec::with_capacity(256 * 256);
                     // Clone progress bar handle for thread-safe increments
-                    let lp = pb.as_ref().map(|p| p.clone());
+                    let lp = pb.clone();
                     for &i in chunk {
                         if by_step {
                             let slice = self.get_slice(i)?;
@@ -390,7 +395,7 @@ impl PackReader {
             reduced.total_steps as f64 / reduced.count as f64
         };
         Ok(PackStats {
-            count: reduced.count as u64,
+            count: reduced.count,
             total_steps: reduced.total_steps,
             min_len: if reduced.count == 0 {
                 0
@@ -626,13 +631,11 @@ mod tests {
     fn write_pack(v1s: &[Vec<u8>], v2s: &[Vec<u8>]) -> NamedTempFile {
         let mut entries: Vec<(u64, u32, u16, u16, u32, u32, Vec<u8>)> = Vec::new();
         let align = 4096usize;
-        let mut offset = 0usize; // will fill after header+index size known
         let count = v1s.len() + v2s.len();
         let mut tmp = NamedTempFile::new().unwrap();
 
         // Reserve header + index + footer space in buffer logic by writing later.
         // We'll assemble into a Vec then write to file for clarity.
-        let mut data_region: Vec<u8> = Vec::new();
 
         // Prepare entries (we will compute offsets after we know index size)
         for b in v1s {
@@ -645,7 +648,7 @@ mod tests {
         // Layout calculations
         let header_len = 28usize;
         let index_len = count * 32;
-        offset = header_len + index_len;
+        let mut offset = header_len + index_len;
         // Align data start
         if offset % align != 0 {
             offset += align - (offset % align);
@@ -685,7 +688,8 @@ mod tests {
         // Pad to alignment
         if file.len() % align != 0 {
             let pad = align - (file.len() % align);
-            file.extend(std::iter::repeat(0u8).take(pad));
+            let pad_vec = vec![0u8; pad];
+            file.extend_from_slice(&pad_vec);
         }
 
         // Data region
@@ -694,7 +698,8 @@ mod tests {
         for e in &entries {
             let needed = e.0 as usize - file.len();
             if needed > 0 {
-                file.extend(std::iter::repeat(0u8).take(needed));
+                let pad_vec = vec![0u8; needed];
+                file.extend_from_slice(&pad_vec);
             }
             file.extend_from_slice(&e.6);
         }

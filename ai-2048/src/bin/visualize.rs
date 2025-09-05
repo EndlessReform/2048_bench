@@ -180,7 +180,7 @@ fn main() -> anyhow::Result<()> {
             f.write_all(b"\n")?; // newline for CLI friendliness
         } else {
             serde_json::to_writer(io::stdout().lock(), &payload)?;
-            eprintln!(""); // ensure newline when stdout is piped; use stderr to avoid JSON pollution
+            eprintln!(); // ensure newline when stdout is piped; use stderr to avoid JSON pollution
         }
     } else {
         println!("{} {}", "File:".bold(), format!("{}", args.path.display()).cyan());
@@ -193,9 +193,9 @@ fn main() -> anyhow::Result<()> {
 
         if clamped {
             println!(
-                "{} {} (max is {})",
+                "{} requested step {} is out of range; showing highest (max is {})",
                 "Note:".bold().bright_yellow(),
-                format!("requested step {} is out of range; showing highest", args.step.unwrap()),
+                args.step.unwrap(),
                 steps
             );
         }

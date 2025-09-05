@@ -10,12 +10,14 @@ mod move_enum;
 mod expectimax;
 mod serialization;
 mod pack;
+mod datapack;
 
 pub use board::{PyBoard, PyRng};
 pub use move_enum::PyMove;
 pub use expectimax::{PyExpectimax, PyExpectimaxConfig, PySearchStats};
 pub use serialization::{PyRunV2, PyStepV2, PyBranchV2, PyMeta, normalize_branches_py};
 pub use pack::{PyPackReader, PyPackStats, PyPackView};
+pub use datapack::PyDataset;
 
 /// Initialize the ai-2048 Python module
 #[pymodule]
@@ -45,6 +47,8 @@ fn ai_2048(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // Iterators (internal types)
     m.add_class::<pack::PyPackIter>()?;
     m.add_class::<pack::PyPackBatchesIter>()?;
+    // Dataset
+    m.add_class::<datapack::PyDataset>()?;
 
     Ok(())
 }
