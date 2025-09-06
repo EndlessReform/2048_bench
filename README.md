@@ -163,6 +163,12 @@ println!("runs={}, steps={}", rep.runs, rep.steps);
 # Ok::<(), anyhow::Error>(())
 ```
 
+EV encoding (branches)
+- Field order is fixed: Up=0, Down=1, Left=2, Right=3.
+- `ev_values`: normalized to [0,1]; the chosen direction is written as exactly 1.0 for stability.
+- `ev_legal`: `u8` bitmask for legality where bit set => legal. Illegal branches also have `ev_values == 0.0`, but 0.0 alone isn’t sufficient to infer legality — use the mask.
+- Training tip: expand the mask to `(N,4)` and zero-out illegal entries, e.g. `evs *= mask.astype(np.float32)` in Python.
+
 
 
 **Development**

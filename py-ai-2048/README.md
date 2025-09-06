@@ -151,12 +151,18 @@ exps_buf, dirs, evs = a2.batch_from_steps(steps, idxs, parallel=True)
 exps = np.frombuffer(exps_buf, dtype=np.uint8).reshape(-1, 16)   # (N, 16)
 dirs = dirs.astype(np.int64)                                     # (N,)
 evs  = evs                                                       # (N, 4) float32
+
+# Apply legality mask (optional but recommended when 0.0 could be legal)
+mask_bits = steps['ev_legal'][idxs]
+legal = np.stack([(mask_bits & (1 << i)) != 0 for i in range(4)], axis=1)
+evs = evs * legal.astype(np.float32)
 ```
 
 Notes
 - `batch_from_steps` combines NumPy field slicing with fast GIL-free exponent conversion.
 - The `bytearray` can be wrapped zero-copy via `np.frombuffer`.
 - Keep `steps` loaded in RAM (`mmap_mode=None`) for fastest random sampling.
+ - EVs: `ev_values` stores normalized values for branches; `ev_legal` is a bitmask (Up=1, Down=2, Left=4, Right=8). Illegal branches also have value 0.0 — use the mask to disambiguate.
 
 ### PyTorch DataLoader Example
 
