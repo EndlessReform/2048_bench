@@ -130,100 +130,38 @@ pack.to_jsonl("runs.jsonl", true, false)?;
 pack.to_jsonl("steps.jsonl", true, true)?;
 ```
 
-Reading a packfile from Python (PyO3):
+### Dataset (NPY + SQLite)
 
+Build a dataset directory from `.a2run2` runs. The output is:
+- `steps.npy`: structured NumPy array with fields `(board, move, ev_legal, ev_values[4], run_id, step_index)`
+- `metadata.db`: SQLite database with a `runs` table (id, first_step_idx, num_steps, etc.)
+
+Build:
 ```
-import ai_2048 as a2
-
-r = a2.PackReader.open("dataset.a2pack")
-print(r.stats.count, r.stats.mean_len)
-run0 = r.decode(0)                # -> RunV2 (v1 auto-upgraded)
-batch = r.decode_batch([0, 5, 42])
-# Per-run JSONL
-r.to_jsonl("runs.jsonl", parallel=True)
-# Per-step JSONL (flattened; pre_board is 16 exponents)
-r.to_jsonl("steps.jsonl", parallel=True, by_step=True)
+cargo run -q -p ai-2048 --bin dataset -- build --input /path/to/runs --out dataset_dir
 ```
 
-Additional CLI commands:
-
-- Validate: `cargo run -q -p ai-2048 --bin a2pack -- validate --packfile dataset.a2pack`
-- Stats: `cargo run -q -p ai-2048 --bin a2pack -- stats --packfile dataset.a2pack`
-- To JSONL (per-run): `cargo run -q -p ai-2048 --bin a2pack -- to-jsonl --packfile dataset.a2pack --output runs.jsonl --parallel`
-- To JSONL (per-step): `cargo run -q -p ai-2048 --bin a2pack -- to-jsonl --packfile dataset.a2pack --output steps.jsonl --parallel --by-step`
-- Extract runs: `cargo run -q -p ai-2048 --bin a2pack -- extract --packfile dataset.a2pack --indices 0,5,42 --output out/`
-- Inspect run: `cargo run -q -p ai-2048 --bin a2pack -- inspect --packfile dataset.a2pack --index 123`
-
-### Dataset Pack (.dat) — RAM-friendly
-
-For shuffled training workloads, load all steps into RAM using the dataset pack format. This flattens all runs into a single steps array with lightweight run metadata. Loading is parallelized.
-
-Build a dataset pack from `.a2run2` files:
-
+Append new runs (atomic rewrite of steps.npy + insert into metadata.db):
 ```
-cargo run -q -p ai-2048 --bin datapack -- build --input /path/to/runs --output dataset.dat
+cargo run -q -p ai-2048 --bin dataset -- append --dataset dataset_dir --input /path/to/new_runs
 ```
 
-Validate and inspect:
-
+Stats:
 ```
-cargo run -q -p ai-2048 --bin datapack -- validate --pack dataset.dat
-cargo run -q -p ai-2048 --bin datapack -- stats --pack dataset.dat
-cargo run -q -p ai-2048 --bin datapack -- inspect --pack dataset.dat --index 0
+cargo run -q -p ai-2048 --bin dataset -- stats --dataset dataset_dir
 ```
 
-Programmatic usage (Rust):
-
+Programmatic (Rust):
 ```rust
-use ai_2048::serialization::{PackBuilder, DataPack};
+use ai_2048::serialization::dataset::build_dataset;
 use std::path::Path;
 
-// Build and save
-// let pb = PackBuilder::from_directory(Path::new("runs/"))?;
-// pb.write_to_file("dataset.dat")?;
-
-// Load into memory (parallel decode by default)
-// let dp = DataPack::load(Path::new("dataset.dat"))?;
-// assert!(dp.steps.len() > 0);
-# Ok::<(), Box<dyn std::error::Error>>(())
+let runs = Path::new("runs/");
+let out = Path::new("dataset_dir/");
+let rep = build_dataset(runs, out)?;
+println!("runs={}, steps={}", rep.runs, rep.steps);
+# Ok::<(), anyhow::Error>(())
 ```
-
-Notes:
-- Only `.a2run2` (postcard-v2) runs are supported in the builder.
-- The binary layout and motivation are described in `docs/2048-pack.md`.
-
-Incremental append new runs (atomic rewrite):
-
-```
-cargo run -q -p ai-2048 --bin datapack -- append --pack dataset.dat --input /path/to/new_runs --output dataset.dat
-```
-
-- Writes to `dataset.dat.tmp` and atomically renames to `dataset.dat` on success.
-- Keeps memory bounded to the new runs; existing `.dat` is streamed, not fully loaded.
-
-Merge two packs (A then B):
-
-```
-cargo run -q -p ai-2048 --bin datapack -- merge --a a.dat --b b.dat --output merged.dat
-```
-
-- Preserves order A then B. Adjusts B run ids and step indices automatically.
-
-Time load and index creation costs:
-
-```
-cargo run -q -p ai-2048 --bin datapack -- time-load --pack dataset.dat
-```
-
-- Prints file size, runs, steps, total load time, and reindex time.
-
-Benchmark random batch reads (e.g., batch size 768):
-
-```
-cargo run -q -p ai-2048 --bin datapack -- bench-batches --pack dataset.dat --batch 768 --iters 10000 --pregenerate true
-```
-
-- `--pregenerate true` excludes RNG overhead from timing. Increase `--iters` for steadier numbers on large packs.
 
 
 
