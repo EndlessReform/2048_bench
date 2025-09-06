@@ -6,8 +6,7 @@
 //! structures (with `branches: None`).
 
 mod v2;
-mod pack;
-mod datapack;
+pub mod dataset;
 
 pub use v2::{
     BranchV2,
@@ -22,17 +21,10 @@ pub use v2::{
     read_postcard_from_path,
 };
 
-pub use pack::{
-    PackReader,
-    PackError,
-    RunKind,
-    PackStats,
+pub use dataset::{
+    StepRow,
+    BuildReport,
+    build_dataset,
 };
 
-pub use datapack::{
-    DataPack,
-    DataPackError,
-    Step,
-    RunMeta,
-    PackBuilder,
-};
+// Legacy pack/.dat surfaces removed.

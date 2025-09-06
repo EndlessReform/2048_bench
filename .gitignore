@@ -1,9 +1,10 @@
 /target
+
+# data files
 traces/
+datasets
 *.a2run
 *.a2run2
-*.a2pack
-*.dat
 *.jsonl
 !examples/example.a2run2
 

@@ -1,6 +1,6 @@
 # PyO3 Python Bindings for ai-2048
 
-High-performance Python bindings for the ai-2048 Rust library: a fast 2048 engine with an Expectimax AI, v2 run serialization (postcard), and a RAM-friendly dataset pack for shuffled ML training.
+High-performance Python bindings for the ai-2048 Rust library: a fast 2048 engine with an Expectimax AI, v2 run serialization (postcard), and an idiomatic NPY + SQLite data path for training.
 
 ## What’s Implemented
 
@@ -9,7 +9,7 @@ High-performance Python bindings for the ai-2048 Rust library: a fast 2048 engin
 - Rng: deterministic RNG wrapper around Rust `StdRng` with `clone()`.
 - Expectimax (single-thread): `best_move`, `branch_evals`, `state_value`, `last_stats`, `reset_stats`.
 - Serialization (v2): `RunV2`, `StepV2`, `Meta`, `BranchV2`, file and bytes I/O, `normalize_branches_py`.
-- Dataset pack: `Dataset` for fast, in-RAM, randomly shuffled step reads from a single `.dat` file built from `.a2run2` runs.
+- Dataset helpers (NPY + SQLite): fast batch conversion of packed boards (u64) into 16-exponent arrays (GIL-free, parallel-capable).
 - Python protocols: `__str__`, `__repr__`, `__eq__`, `__hash__`, `__iter__` for `Board`.
 
 ## Build & Test
@@ -119,125 +119,88 @@ run.save("/tmp/roundtrip.a2run2")
 run3 = RunV2.load("/tmp/roundtrip.a2run2")
 ```
 
-## Dataset Pack (.dat) — RAM-friendly (shuffled reads)
+## Dataset (steps.npy + metadata.db)
 
-For shuffled training over large step datasets, build a `.dat` file (RAM-friendly) and read via `Dataset`.
-
-Build a `.dat` from `.a2run2` runs (Rust CLI):
+Build a dataset from `.a2run2` runs (Rust CLI):
 
 ```bash
-cargo run -q -p ai-2048 --bin datapack -- build --input /path/to/runs --output dataset.dat
+cargo run -q -p ai-2048 --bin dataset -- build --input /path/to/runs --out dataset_dir
 ```
 
-Load in Python and feed into a PyTorch DataLoader:
+Python usage (NumPy + sqlite3):
 
 ```python
+from pathlib import Path
+import sqlite3
+import numpy as np
 import ai_2048 as a2
+
+dataset = Path("dataset_dir")
+steps = np.load(dataset / "steps.npy")  # structured array
+conn = sqlite3.connect(dataset / "metadata.db")
+
+# Example filter: runs with score between [50k, 500k]
+rids = [row[0] for row in conn.execute(
+    "SELECT id FROM runs WHERE max_score BETWEEN ? AND ?", (50_000, 500_000)
+)]
+mask = np.isin(steps['run_id'], np.array(rids, dtype=steps['run_id'].dtype))
+idxs = np.flatnonzero(mask)
+
+# Pull fields and convert boards to exponents efficiently (GIL-free + parallel)
+exps_buf, dirs, evs = a2.batch_from_steps(steps, idxs, parallel=True)
+exps = np.frombuffer(exps_buf, dtype=np.uint8).reshape(-1, 16)   # (N, 16)
+dirs = dirs.astype(np.int64)                                     # (N,)
+evs  = evs                                                       # (N, 4) float32
+```
+
+Notes
+- `batch_from_steps` combines NumPy field slicing with fast GIL-free exponent conversion.
+- The `bytearray` can be wrapped zero-copy via `np.frombuffer`.
+- Keep `steps` loaded in RAM (`mmap_mode=None`) for fastest random sampling.
+
+### PyTorch DataLoader Example
+
+```python
 import torch
 from torch.utils.data import Dataset, DataLoader
 
 class StepsDataset(Dataset):
-    def __init__(self, dat_path: str):
-        self.ds = a2.Dataset(dat_path)
+    def __init__(self, dataset_dir: str, run_sql: str | None = None, sql_params: tuple = ()):  # optional SQL filter
+        import sqlite3, numpy as np
+        self.steps = np.load(f"{dataset_dir}/steps.npy")
+        conn = sqlite3.connect(f"{dataset_dir}/metadata.db")
+        if run_sql:
+            rids = [row[0] for row in conn.execute(run_sql, sql_params)]
+            mask = np.isin(self.steps['run_id'], np.array(rids, dtype=self.steps['run_id'].dtype))
+            self.indices = np.flatnonzero(mask)
+        else:
+            self.indices = np.arange(self.steps.shape[0], dtype=np.int64)
 
     def __len__(self):
-        return len(self.ds)
+        return self.indices.size
 
     def __getitem__(self, idx):
-        # Fetch a single item via a 1-element batch
-        pre, dirs, brs = self.ds.get_batch([idx])
-        # pre is a list of one 16-exponent list; dirs is a list of one int; brs is a list of 4 BranchV2
-        exps = pre[0]             # length 16, 0=empty, 1->2, ...
-        dir_idx = dirs[0]         # 0:Up, 1:Down, 2:Left, 3:Right
-        # Convert BranchV2 list to float EV targets in [0,1]
-        evs = [b.value if b.is_legal else 0.0 for b in brs[0]]
-        return exps, dir_idx, evs
+        return int(self.indices[idx])   # return global index; we slice in the collate fn
 
-def collate_steps(batch):
-    # Batch is a list of (exps, dir, evs)
-    exps = torch.tensor([b[0] for b in batch], dtype=torch.uint8)   # (N, 16)
-    dirs = torch.tensor([b[1] for b in batch], dtype=torch.long)    # (N,)
-    evs  = torch.tensor([b[2] for b in batch], dtype=torch.float32) # (N, 4)
-    return exps, dirs, evs
+def collate_steps(batch_indices, steps):
+    import numpy as np, ai_2048 as a2
+    idxs = np.array(batch_indices, dtype=np.int64)
+    exps_buf, dirs, evs = a2.batch_from_steps(steps, idxs, parallel=True)
+    exps = np.frombuffer(exps_buf, dtype=np.uint8).reshape(-1, 16)
+    # Convert to tensors
+    exps_t = torch.from_numpy(exps.copy())            # uint8 (copy ensures tensor owns memory)
+    dirs_t = torch.from_numpy(dirs.astype(np.int64))  # long labels 0..3
+    evs_t  = torch.from_numpy(evs.copy())             # float32 targets (N,4)
+    return exps_t, dirs_t, evs_t
 
-ds = StepsDataset("dataset.dat")
-loader = DataLoader(ds, batch_size=3072, shuffle=True, num_workers=0, collate_fn=collate_steps)
+ds = StepsDataset("dataset_dir", run_sql="SELECT id FROM runs WHERE max_score BETWEEN ? AND ?", sql_params=(50_000, 500_000))
+loader = DataLoader(ds, batch_size=768, shuffle=True, num_workers=0,
+                    collate_fn=lambda batch: collate_steps(batch, ds.steps))
 
 for exps, dirs, evs in loader:
-    # exps: (B, 16) uint8 exponents (row-major c1r1..c4r4)
-    # dirs: (B,) long indices 0..3
-    # evs:  (B, 4) float32 targets in [0,1] (Up, Down, Left, Right)
-    # model training step here
-    pass
-
-### Reading EVs clearly (binning, argmax, numpy)
-
-If you want to work directly with the `Dataset` without a custom `torch.utils.data.Dataset`, you can grab a small batch and convert to numpy easily:
-
-```python
-import numpy as np
-import ai_2048 as a2
-
-ds = a2.Dataset("dataset.dat")
-
-# Pull an arbitrary mini-batch by indices
-pre, dirs, brs = ds.get_batch([0, 5, 10, 42])
-
-# Boards: convert 16-exponent lists to numpy (B, 16) uint8
-exps_np = np.asarray(pre, dtype=np.uint8)
-
-# Branch EVs: brs is a list of 4 BranchV2 per item -> convert to floats in [0,1]
-evs = np.array([[b.value if b.is_legal else 0.0 for b in branches] for branches in brs], dtype=np.float32)  # (B, 4)
-
-# Example A: bin by the maximum EV per item into 4 buckets (0–.25, .25–.5, .5–.75, .75–1.0]
-max_evs = evs.max(axis=1)
-bins = np.digitize(max_evs, bins=[0.25, 0.5, 0.75])  # -> 0..3
-
-# Example B: per-branch binning (e.g., one bucket per branch above 0.8)
-high_mask = evs >= 0.8
-
-# Example C: argmax label of best branch (0:Up, 1:Down, 2:Left, 3:Right)
-labels = evs.argmax(axis=1)
-
-print(exps_np.shape, evs.shape, labels)
-```
-
-Notes:
-- `pre` is already the exponent encoding (0 empty, 1->2, ...) in row-major `(c1r1..c4r4)` order; if you prefer values instead of exponents, convert via `np.where(exps_np == 0, 0, 2 ** exps_np)`.
-- `brs` elements are BranchV2 objects; use `b.value if b.is_legal else 0.0` to get float targets.
-
-Filtering example (score range view):
-
-```python
-base = a2.Dataset("dataset.dat")
-mid_scores = base.filter_by_score(50_000, 500_000)
-print(len(mid_scores))  # number of steps in view
-```
-
-Notes:
-- Branch EVs are stored in `.dat` as quantized values with exact 0.0 and 1.0 endpoints; `Dataset.get_batch` returns a third value with 4 BranchV2 labels (Up, Down, Left, Right). The chosen branch is exactly 1.0.
-- The dataset is fully in memory; random access is just indexed reads of fixed-size records.
-```python
-for (pre, dirs, evs) in train.iter_step_batches(batch_size=4096, shuffle=True, seed=0):
-    pass
-for (pre, dirs, evs) in test.iter_step_batches(batch_size=4096, shuffle=True, seed=0):
-    pass
-
-# You can also get run-level batches restricted to a view
-for runs in train.iter_batches(batch_size=64, shuffle=True, seed=99):
+    # exps: (B, 16) uint8, dirs: (B,) long, evs: (B,4) float32
     pass
 ```
-
-Parameters:
-- unit: "run" (default) avoids correlated leakage; "step" hits step targets by adding whole runs.
-- test_pct: float in (0,1); deterministic selection with `seed` when `order="random"`.
-- test_size: integer in the chosen unit; mutually exclusive with `test_pct`.
-- seed: RNG seed (default 0) for deterministic random ordering.
-- order: "random" (default) or "sequential" (respect pack order before splitting).
-
-Behavior and edge cases:
-- For `test_pct` with `unit="run"`: uses `floor(pct * num_runs)`, clamped to at least 1 when `pct>0`.
-- For `unit="step"`: greedily adds whole runs until the target step count is reached or exceeded.
 - Train/test are disjoint and cover the selected universe (runs).
 
 ## Initialize a Board from a Step

@@ -210,3 +210,37 @@ impl IntoIterator for &Board {
     #[inline]
     fn into_iter(self) -> Self::IntoIter { self.tiles() }
 }
+
+/// Convert packed boards to exponent rows into the provided output buffer.
+///
+/// - `out` must be length = `boards.len() * 16` and will be filled with
+///   16 exponents per board (row-major).
+/// - If `parallel` is true, uses Rayon to parallelize across cores.
+///
+/// Example
+/// ```
+/// use ai_2048::engine::{self as GameEngine, state::boards_to_exponents_into};
+/// GameEngine::new();
+/// let boards: [u64; 2] = [0x1000_0000_0000_0000, 0x2100_0000_0000_0000];
+/// let mut out = vec![0u8; boards.len() * 16];
+/// boards_to_exponents_into(&mut out, &boards, false);
+/// assert_eq!(out.len(), 32);
+/// ```
+pub fn boards_to_exponents_into(out: &mut [u8], boards: &[u64], parallel: bool) {
+    assert_eq!(out.len(), boards.len() * 16, "out buffer must be N*16 bytes");
+    if parallel {
+        use rayon::prelude::*;
+        out.par_chunks_mut(16)
+            .zip(boards.par_iter().copied())
+            .for_each(|(dst, b)| {
+                let exps = Board::from_raw(b).to_vec();
+                dst.copy_from_slice(&exps[..16]);
+            });
+    } else {
+        for (i, &b) in boards.iter().enumerate() {
+            let exps = Board::from_raw(b).to_vec();
+            let dst = &mut out[i * 16..(i + 1) * 16];
+            dst.copy_from_slice(&exps[..16]);
+        }
+    }
+}

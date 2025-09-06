@@ -9,15 +9,13 @@ mod board;
 mod move_enum;
 mod expectimax;
 mod serialization;
-mod pack;
-mod datapack;
+mod dataset;
 
 pub use board::{PyBoard, PyRng};
 pub use move_enum::PyMove;
 pub use expectimax::{PyExpectimax, PyExpectimaxConfig, PySearchStats};
 pub use serialization::{PyRunV2, PyStepV2, PyBranchV2, PyMeta, normalize_branches_py};
-pub use pack::{PyPackReader, PyPackStats, PyPackView};
-pub use datapack::PyDataset;
+pub use dataset::{exps_from_boards, batch_from_steps};
 
 /// Initialize the ai-2048 Python module
 #[pymodule]
@@ -40,15 +38,9 @@ fn ai_2048(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyMeta>()?;
     m.add_function(wrap_pyfunction!(normalize_branches_py, m)?)?;
 
-    // Packfile bindings
-    m.add_class::<PyPackReader>()?;
-    m.add_class::<PyPackStats>()?;
-    m.add_class::<pack::PyPackView>()?;
-    // Iterators (internal types)
-    m.add_class::<pack::PyPackIter>()?;
-    m.add_class::<pack::PyPackBatchesIter>()?;
-    // Dataset
-    m.add_class::<datapack::PyDataset>()?;
+    // Dataset helpers (NPY + SQLite path)
+    m.add_function(wrap_pyfunction!(exps_from_boards, m)?)?;
+    m.add_function(wrap_pyfunction!(batch_from_steps, m)?)?;
 
     Ok(())
 }

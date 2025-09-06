@@ -1,10 +1,10 @@
-//! ai-2048: a 2048 game engine + Expectimax policy
+//! ai-2048: a 2048 engine + Expectimax policy
 //!
 //! This crate provides:
 //! - A compact `Board` type with ergonomic methods (`shift`, `make_move`, `score`, ...)
 //! - An Expectimax AI (`expectimax` module) with single-threaded and parallel variants
-//! - A binary trace format for runs (`trace` module)
-//! - Dataset pack utilities for RAM-friendly training data (`serialization::DataPack`, `serialization::PackBuilder`)
+//! - A binary v2 trace format (postcard) for runs (`trace` + `serialization::v2`)
+//! - A dataset builder that flattens runs into `steps.npy` (NumPy structured array) + `metadata.db` (SQLite)
 //!
 //! Quick start:
 //! ```
@@ -67,6 +67,21 @@
 //! // 4) Inspect final state (score, highest tile, etc.)
 //! let _final_score = b.score();
 //! assert!(moves > 0);
+//! ```
+//!
+//! Dataset build example
+//! ```no_run
+//! use ai_2048::serialization::dataset::build_dataset;
+//! use std::path::Path;
+//!
+//! // Build from a directory of .a2run2 files
+//! let runs_dir = Path::new("runs/");
+//! let out_dir = Path::new("dataset/");
+//! let rep = build_dataset(runs_dir, out_dir).unwrap();
+//! println!("runs={}, steps={}", rep.runs, rep.steps);
+//! // Output:
+//! //   dataset/steps.npy (record dtype: board, move, ev_legal, ev_values[4], run_id, step_index)
+//! //   dataset/metadata.db (SQLite: runs table)
 //! ```
 //!
 pub mod engine;
