@@ -92,6 +92,19 @@ pub fn build_dataset(runs_dir: &Path, output_dir: &Path) -> anyhow::Result<Build
         .map(|p| ser::read_postcard_from_path(p).map_err(|e| anyhow::anyhow!(e)))
         .collect::<Result<Vec<_>, _>>()?;
 
+    write_from_runs(&runs, output_dir)
+}
+
+/// Build a dataset directory from already-decoded runs.
+///
+/// Writes `steps.npy` (structured array rows) and `metadata.db` atomically to `output_dir`.
+pub fn build_dataset_from_runs(runs: &[RunV2], output_dir: &Path) -> anyhow::Result<BuildReport> {
+    anyhow::ensure!(!runs.is_empty(), "no runs provided");
+    std::fs::create_dir_all(output_dir)?;
+    write_from_runs(runs, output_dir)
+}
+
+fn write_from_runs(runs: &[RunV2], output_dir: &Path) -> anyhow::Result<BuildReport> {
     // Flatten to steps and run metadata
     let mut steps: Vec<StepRow> =
         Vec::with_capacity(runs.iter().map(|r| r.meta.steps as usize).sum());
@@ -162,10 +175,7 @@ pub fn build_dataset(runs_dir: &Path, output_dir: &Path) -> anyhow::Result<Build
     let db_path = output_dir.join("metadata.db");
     create_metadata_db(&db_path, &run_rows)?;
 
-    Ok(BuildReport {
-        runs: run_rows.len(),
-        steps: steps.len(),
-    })
+    Ok(BuildReport { runs: run_rows.len(), steps: steps.len() })
 }
 
 /// Build the exact dtype we want for the row struct.
